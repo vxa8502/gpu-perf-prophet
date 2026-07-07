@@ -1,0 +1,52 @@
+##############################################################################
+# GPU Perf Prophet — Static Cloud GPU Pricing
+#
+# source_date: 2026-06-17
+# Policy: static snapshot — no live API calls. Prices are per-GPU per-hour
+#         on a single on-demand instance. Costs vary by cloud provider,
+#         region, and contract term; these are representative on-demand
+#         rates for planning purposes only.
+#
+# Sources (June 2026):
+#   AMD Developer Cloud (amd.com/en/developer/resources/cloud-access.html)
+#   Lambda Labs (lambdalabs.com/service/gpu-cloud)
+#   Vast.ai / RunPod community rates (runpod.io/gpu-instance/pricing)
+#   getdeploying.com/gpus/amd-mi355x (multi-provider comparison)
+#
+# price_per_gpu_hr: USD, on-demand, single GPU, no reserved/spot discount
+# source: human-readable provenance note
+##############################################################################
+
+pricing:
+
+  mi300x:
+    price_per_gpu_hr: 1.99
+    source: "AMD Developer Cloud on-demand, June 2026"
+
+  mi325x:
+    price_per_gpu_hr: 2.50
+    source: "AMD Developer Cloud est. (MI325X premium over MI300X), June 2026"
+
+  mi355x:
+    price_per_gpu_hr: 4.50
+    source: "Mid-market on-demand est., June 2026 (range: $2.95 TensorWave – $8.60 OCI; mkt avg $5.45; up 232% since Oct 2025)"
+
+  h100_sxm:
+    price_per_gpu_hr: 2.49
+    source: "Lambda Labs H100 SXM5 80GB on-demand, June 2026"
+
+  h200_sxm:
+    price_per_gpu_hr: 3.99
+    source: "Lambda Labs H200 SXM 141GB on-demand est., June 2026"
+
+  a100_sxm_80gb:
+    price_per_gpu_hr: 1.50
+    source: "Lambda Labs A100 SXM4 80GB on-demand, June 2026"
+
+  l4:
+    price_per_gpu_hr: 0.44
+    source: "Vast.ai / RunPod L4 on-demand est., June 2026"
+
+  rtx4090:
+    price_per_gpu_hr: 0.39
+    source: "RunPod RTX 4090 on-demand, June 2026"

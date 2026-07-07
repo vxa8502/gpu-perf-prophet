@@ -1,0 +1,28 @@
+# Data processing
+pandas>=2.0
+numpy>=1.26
+pyarrow>=14.0        # Parquet I/O
+pyyaml>=6.0          # GPU/LLM spec databases
+
+# ML
+scikit-learn>=1.4
+xgboost>=2.0
+lightgbm>=4.0
+shap>=0.45
+optuna>=3.5
+
+# Experiment tracking
+mlflow>=2.10
+
+# API + serving
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6
+
+# UI
+streamlit>=1.32
+
+# Testing
+pytest>=8.0
+pytest-cov>=4.1
+httpx>=0.27           # required by FastAPI TestClient (starlette.testclient)

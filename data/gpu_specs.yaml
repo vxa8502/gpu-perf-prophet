@@ -1,0 +1,507 @@
+##############################################################################
+# GPU Perf Prophet — GPU Specification Database
+# schema_version: "1.0"
+#
+# Accuracy policy
+# ───────────────
+# spec_confidence: "verified"   → from vendor spec sheet / whitepaper
+#                  "estimated"  → derived from architecture docs or cross-refs;
+#                                 verify before Phase-2 training freeze
+#
+# peak_tflops are DENSE (no structured sparsity) per design doc ADR-006.
+# AMD "compute" throughput uses MFMA instruction peak.
+# NVIDIA "compute" throughput uses Tensor Core peak for BF16/FP16/FP8;
+#   fp32 is scalar CUDA-core throughput.
+# hbm_bandwidth_tbps is peak theoretical from memory specification.
+# ~ (null) means not supported natively on that GPU.
+#
+# in_model_scope
+# ──────────────
+# true  → GPU is a Phase-1 recommendation target
+# false → GPU appears in the training corpus but is not exposed to users v1
+#         (Blackwell family, edge GPUs, GPU combos without clean single-SKU rows)
+#
+# aliases
+# ───────
+# Every unique accelerator_model_name string that appeared in MLPerf
+# v4.1–v6.0 system JSONs for this GPU, including case variants and
+# suffix variants without the count specifier "(xN)".
+##############################################################################
+
+schema_version: "1.0"
+
+gpus:
+
+  # ── AMD Instinct CDNA3 ─────────────────────────────────────────────────
+
+  - id: mi300x
+    name: "AMD Instinct MI300X"
+    vendor: amd
+    architecture: cdna3
+    memory_type: hbm3
+    vram_gb: 192
+    hbm_bandwidth_tbps: 5.3
+    peak_tflops:
+      fp32: 163.4
+      bf16: 1307.4
+      fp16: 1307.4
+      fp8:  2614.9
+      fp6:  ~             # not supported natively in CDNA3
+      fp4:  ~             # not supported natively in CDNA3
+      int8: 2614.9
+    compute_units: 304
+    l2_cache_mb: 32
+    tdp_w: 750
+    spec_confidence: verified   # AMD MI300X Data Sheet, Dec 2023
+    in_model_scope: true
+    aliases:
+      - "AMD Instinct MI300X"
+      - "AMD Instinct MI300X 192GB HBM3"
+      - "AMD Instinct MI300X-NPS1-SPX-192GB-750W"
+      - "AMD MI300X-NPS1-SPX-192GB-750W"
+
+  - id: mi325x
+    name: "AMD Instinct MI325X"
+    vendor: amd
+    architecture: cdna3             # same compute die as MI300X; HBM3E memory upgrade
+    memory_type: hbm3e
+    vram_gb: 256
+    hbm_bandwidth_tbps: 6.0
+    peak_tflops:
+      fp32: 163.4                   # same CDNA3 compute die
+      bf16: 1307.4
+      fp16: 1307.4
+      fp8:  2614.9
+      fp6:  ~
+      fp4:  ~
+      int8: 2614.9
+    compute_units: 304
+    l2_cache_mb: 32
+    tdp_w: 1000
+    spec_confidence: verified   # AMD MI325X Announcement, Oct 2024
+    in_model_scope: true
+    aliases:
+      - "AMD Instinct MI325X"
+      - "AMD Instinct MI325X 256GB HBM3E"
+      - "AMD Instinct MI325X 256GB HBM3e"     # lowercase variant in system JSONs
+
+  # ── AMD Instinct CDNA4 ─────────────────────────────────────────────────
+
+  - id: mi355x
+    name: "AMD Instinct MI355X"
+    vendor: amd
+    architecture: cdna4
+    memory_type: hbm3e
+    vram_gb: 288
+    hbm_bandwidth_tbps: 8.0         # AMD official spec sheet (amd-instinct-mi355x-gpu-brochure.pdf)
+    peak_tflops:
+      fp32: 157.3                   # AMD official spec sheet — vector FP32; CDNA4 ratio = 16× (vs CDNA3 8×)
+      bf16: 2516.6                  # AMD official spec sheet — matrix
+      fp16: 2516.6                  # AMD official spec sheet — matrix
+      fp8:  5033.2                  # AMD official spec sheet — matrix
+      fp6:  10066.3                 # AMD official spec sheet — CDNA4 native FP6
+      fp4:  20132.6                 # AMD official spec sheet — MXFP4
+      int8: 5033.2                  # AMD official spec sheet
+    compute_units: 304              # (est) — not listed on spec sheet; no change
+    l2_cache_mb: 32                 # (est)
+    tdp_w: 1400                     # AMD official spec sheet (1.4 kW); 1000 W variant observed in MLPerf
+    spec_confidence: verified        # confirmed 2026-06-17 against AMD official spec sheet
+    in_model_scope: true
+    aliases:
+      - "AMD Instinct MI355X"
+      - "AMD Instinct MI355X 288GB HBM3e"
+      - "AMD Instinct MI355X 288GB HBM3e (Power Cap 1000 W)"
+      - "AMD Instinct MI355X 288GB HBM3e (x87)"  # (x87) stripped by normalizer
+
+  - id: mi350x
+    name: "AMD Instinct MI350X"
+    vendor: amd
+    architecture: cdna4
+    memory_type: hbm3e
+    vram_gb: 288
+    hbm_bandwidth_tbps: 8.0         # AMD official spec sheet (amd-instinct-mi350x-gpu-brochure.pdf)
+    peak_tflops:
+      fp32: 144.2                   # vector FP32; 256 CUs × same clock as MI355X die; confirmed via platform FP16-vector 1153.6 TFLOPS ÷ 8
+      bf16: 2307.0                  # matrix dense; derived from confirmed fp8 (4614.0) using CDNA4 2:1 ratio (verified against MI355X)
+      fp16: 2307.0                  # matrix dense; same derivation
+      fp8:  4614.0                  # matrix dense; AMD official spec sheet — platform 36.9 PFLOPS ÷ 8 GPUs = 4612.5 ≈ 4614 TFLOPS
+      fp6:  9228.0                  # matrix dense; derived from confirmed fp8 × 2 (CDNA4 native MXFP6 support confirmed)
+      fp4:  18456.0                 # matrix dense; derived from confirmed fp8 × 4 (CDNA4 native MXFP4 support confirmed)
+      int8: 4614.0                  # same as fp8 per AMD CDNA4 pattern
+    compute_units: 256              # AMD official spec sheet — 8 XCDs × 32 CUs each
+    l2_cache_mb: 32                 # (est)
+    tdp_w: 1000                     # AMD official spec sheet — air-cooled 1000W variant (vs MI355X 1400W)
+    spec_confidence: verified       # confirmed 2026-06-18 against AMD official spec sheet (amd-instinct-mi350x-gpu-brochure.pdf); bf16/fp6/fp4 derived from confirmed fp8 using CDNA4 ratios
+    in_model_scope: false           # spec gate cleared (S33); scope gate blocked: LOGO-CV ρ=0.019 (14 rows, 35 rounds) — wait for v7.0+ MLPerf data
+    aliases:
+      - "AMD Instinct MI350X"
+      - "AMD Instinct MI350X 288GB HBM3e"
+
+  # ── NVIDIA Hopper ──────────────────────────────────────────────────────
+
+  - id: h100_sxm
+    name: "NVIDIA H100 SXM5"
+    vendor: nvidia
+    architecture: hopper
+    memory_type: hbm3
+    vram_gb: 80
+    hbm_bandwidth_tbps: 3.35
+    peak_tflops:
+      fp32: 66.9                    # scalar CUDA-core FP32
+      bf16: 989.4                   # Tensor Core, dense
+      fp16: 989.4
+      fp8:  1978.9
+      fp6:  ~
+      fp4:  ~
+      int8: 3957.8
+    streaming_multiprocessors: 132
+    l2_cache_mb: 50
+    tdp_w: 700
+    spec_confidence: verified   # NVIDIA H100 GPU Architecture Whitepaper
+    in_model_scope: true
+    aliases:
+      - "NVIDIA H100-SXM-80GB"
+      - "Virtualized NVIDIA H100-SXM-80GB"
+
+  - id: h100_pcie
+    name: "NVIDIA H100 PCIe"
+    vendor: nvidia
+    architecture: hopper
+    memory_type: hbm2e
+    vram_gb: 80
+    hbm_bandwidth_tbps: 2.0
+    peak_tflops:
+      fp32: 51.2
+      bf16: 756.5
+      fp16: 756.5
+      fp8:  1513.0
+      fp6:  ~
+      fp4:  ~
+      int8: 3026.0
+    streaming_multiprocessors: 114
+    l2_cache_mb: 50
+    tdp_w: 350
+    spec_confidence: verified   # NVIDIA H100 PCIe Datasheet
+    in_model_scope: false       # not in v1 scope; included for training signal
+    aliases:
+      - "NVIDIA H100-PCIe-80GB"
+
+  - id: h100_nvl
+    name: "NVIDIA H100 NVL"
+    vendor: nvidia
+    architecture: hopper
+    memory_type: hbm3
+    vram_gb: 94
+    hbm_bandwidth_tbps: 3.93        # (est) scaled from H100 SXM die bandwidth
+    peak_tflops:
+      fp32: 66.9
+      bf16: 989.4                   # same compute die as H100 SXM5
+      fp16: 989.4
+      fp8:  1978.9
+      fp6:  ~
+      fp4:  ~
+      int8: 3957.8
+    streaming_multiprocessors: 132
+    l2_cache_mb: 50
+    tdp_w: 700                      # (est)
+    spec_confidence: estimated
+    in_model_scope: false
+    aliases:
+      - "NVIDIA H100-NVL-94GB"
+
+  - id: h200_sxm
+    name: "NVIDIA H200 SXM"
+    vendor: nvidia
+    architecture: hopper            # same Hopper die as H100; HBM3E memory upgrade
+    memory_type: hbm3e
+    vram_gb: 141
+    hbm_bandwidth_tbps: 4.8
+    peak_tflops:
+      fp32: 66.9                    # same compute die as H100 SXM5
+      bf16: 989.4
+      fp16: 989.4
+      fp8:  1978.9
+      fp6:  ~
+      fp4:  ~
+      int8: 3957.8
+    streaming_multiprocessors: 132
+    l2_cache_mb: 50
+    tdp_w: 700
+    spec_confidence: verified   # NVIDIA H200 Tensor Core GPU Datasheet
+    in_model_scope: true
+    aliases:
+      - "NVIDIA H200-SXM-141GB"
+      - "NVIDIA H200-SXM-141GB-CTS"
+      - "Virtualized NVIDIA H200-SXM-141GB"
+
+  - id: h200_nvl
+    name: "NVIDIA H200 NVL"
+    vendor: nvidia
+    architecture: hopper
+    memory_type: hbm3e
+    vram_gb: 141
+    hbm_bandwidth_tbps: 4.8         # same HBM3E spec as H200 SXM
+    peak_tflops:
+      fp32: 66.9
+      bf16: 989.4
+      fp16: 989.4
+      fp8:  1978.9
+      fp6:  ~
+      fp4:  ~
+      int8: 3957.8
+    streaming_multiprocessors: 132
+    l2_cache_mb: 50
+    tdp_w: 600                      # (est) NVL form-factor typically lower TDP
+    spec_confidence: estimated
+    in_model_scope: false           # not in v1 scope; included for training signal
+    aliases:
+      - "NVIDIA H200-NVL-141GB"
+
+  # GH200 = H100 GPU die + Grace CPU on NVLink-C2C.  GPU-side specs only.
+  - id: gh200_96gb
+    name: "NVIDIA GH200 96GB"
+    vendor: nvidia
+    architecture: hopper
+    memory_type: hbm3
+    vram_gb: 96
+    hbm_bandwidth_tbps: 3.35        # H100 GPU die bandwidth
+    peak_tflops:
+      fp32: 66.9
+      bf16: 989.4
+      fp16: 989.4
+      fp8:  1978.9
+      fp6:  ~
+      fp4:  ~
+      int8: 3957.8
+    streaming_multiprocessors: 132
+    l2_cache_mb: 50
+    tdp_w: 900                      # full GH200 module TDP
+    spec_confidence: verified
+    in_model_scope: false
+    aliases:
+      - "NVIDIA GH200 Grace Hopper Superchip 96GB"
+
+  - id: gh200_144gb
+    name: "NVIDIA GH200 144GB"
+    vendor: nvidia
+    architecture: hopper
+    memory_type: hbm3e
+    vram_gb: 144
+    hbm_bandwidth_tbps: 4.9         # (est) HBM3E variant
+    peak_tflops:
+      fp32: 66.9
+      bf16: 989.4
+      fp16: 989.4
+      fp8:  1978.9
+      fp6:  ~
+      fp4:  ~
+      int8: 3957.8
+    streaming_multiprocessors: 132
+    l2_cache_mb: 50
+    tdp_w: 900
+    spec_confidence: estimated
+    in_model_scope: false
+    aliases:
+      - "NVIDIA GH200 Grace Hopper Superchip 144GB"
+
+  # ── NVIDIA Ampere ──────────────────────────────────────────────────────
+  # A100 has zero LLM rows in v4.1–v6.0 corpus; specs kept for the
+  # recommendation engine (roofline-only fallback for unseen GPUs).
+
+  - id: a100_sxm_80gb
+    name: "NVIDIA A100 SXM4 80GB"
+    vendor: nvidia
+    architecture: ampere
+    memory_type: hbm2e
+    vram_gb: 80
+    hbm_bandwidth_tbps: 2.0
+    peak_tflops:
+      fp32: 77.6                    # scalar CUDA-core FP32
+      bf16: 312.0                   # Tensor Core, dense
+      fp16: 312.0
+      fp8:  ~                       # FP8 not supported natively on Ampere
+      fp6:  ~
+      fp4:  ~
+      int8: 624.0
+    streaming_multiprocessors: 108
+    l2_cache_mb: 40
+    tdp_w: 400
+    spec_confidence: verified   # NVIDIA A100 GPU Architecture Whitepaper
+    in_model_scope: true        # in v1 scope; roofline-only prediction (no training rows)
+    aliases:
+      - "NVIDIA A100-SXM4-80GB"
+      - "NVIDIA A100-SXM-80GB"
+      - "NVIDIA A100 80GB"
+
+  # ── NVIDIA Ada Lovelace ────────────────────────────────────────────────
+  # L4 and RTX 4090 have zero LLM rows in corpus; included for recommender.
+
+  - id: l4
+    name: "NVIDIA L4"
+    vendor: nvidia
+    architecture: ada_lovelace
+    memory_type: gddr6
+    vram_gb: 24
+    hbm_bandwidth_tbps: 0.300       # 300 GB/s GDDR6
+    peak_tflops:
+      fp32: 30.3
+      bf16: 121.6                   # Tensor Core, dense
+      fp16: 121.6
+      fp8:  242.6
+      fp6:  ~
+      fp4:  ~
+      int8: 485.0
+    streaming_multiprocessors: 60
+    l2_cache_mb: 48
+    tdp_w: 72
+    spec_confidence: verified   # NVIDIA L4 Tensor Core GPU Datasheet
+    in_model_scope: true        # in v1 scope; roofline-only (no training rows)
+    aliases:
+      - "NVIDIA L4"
+      - "NVIDIA L4 24GB"
+
+  - id: l40s
+    name: "NVIDIA L40S"
+    vendor: nvidia
+    architecture: ada_lovelace
+    memory_type: gddr6
+    vram_gb: 48
+    hbm_bandwidth_tbps: 0.864       # 864 GB/s GDDR6
+    peak_tflops:
+      fp32: 91.6
+      bf16: 362.1
+      fp16: 362.1
+      fp8:  724.1
+      fp6:  ~
+      fp4:  ~
+      int8: 1448.2
+    streaming_multiprocessors: 142
+    l2_cache_mb: 96
+    tdp_w: 350
+    spec_confidence: verified   # NVIDIA L40S Datasheet
+    in_model_scope: false
+    aliases:
+      - "NVIDIA L40S"
+
+  - id: rtx4090
+    name: "NVIDIA GeForce RTX 4090"
+    vendor: nvidia
+    architecture: ada_lovelace
+    memory_type: gddr6x
+    vram_gb: 24
+    hbm_bandwidth_tbps: 1.008       # GDDR6X
+    peak_tflops:
+      fp32: 82.6
+      bf16: 165.2                   # Tensor Core, dense
+      fp16: 165.2
+      fp8:  330.3                   # (est) 2× FP16
+      fp6:  ~
+      fp4:  ~
+      int8: 660.6
+    streaming_multiprocessors: 128
+    l2_cache_mb: 72
+    tdp_w: 450
+    spec_confidence: verified   # NVIDIA RTX 4090 Product Specifications
+    in_model_scope: true        # in v1 scope; roofline-only (no training rows)
+    aliases:
+      - "NVIDIA GeForce RTX 4090"
+      - "NVIDIA RTX 4090"
+
+  # ── NVIDIA Blackwell — out of v1 scope; included for training signal ──
+  # Rows exist in corpus; having roofline bounds enables the model to train
+  # on them.  They are never surfaced as recommendations in v1.
+
+  - id: b200_sxm
+    name: "NVIDIA B200 SXM"
+    vendor: nvidia
+    architecture: blackwell
+    memory_type: hbm3e
+    vram_gb: 180                    # as reported in MLPerf system JSONs
+    hbm_bandwidth_tbps: 8.0         # (est) Blackwell specification
+    peak_tflops:
+      fp32: 147.0                   # (est)
+      bf16: 2250.0                  # (est)
+      fp16: 2250.0                  # (est)
+      fp8:  4500.0                  # (est)
+      fp6:  ~
+      fp4:  9000.0                  # (est) — Blackwell MXFP4
+      int8: 9000.0                  # (est)
+    streaming_multiprocessors: 160  # (est)
+    l2_cache_mb: 96                 # (est)
+    tdp_w: 1000                     # (est)
+    spec_confidence: estimated
+    in_model_scope: false           # Blackwell explicitly out of v1 scope
+    aliases:
+      - "NVIDIA B200-SXM-180GB"
+
+  - id: b300_sxm
+    name: "NVIDIA B300 SXM"
+    vendor: nvidia
+    architecture: blackwell
+    memory_type: hbm3e
+    vram_gb: 270                    # as reported in MLPerf system JSONs
+    hbm_bandwidth_tbps: 10.0        # (est)
+    peak_tflops:
+      fp32: 147.0                   # (est)
+      bf16: 2250.0                  # (est)
+      fp16: 2250.0                  # (est)
+      fp8:  4500.0                  # (est)
+      fp6:  ~
+      fp4:  9000.0                  # (est)
+      int8: 9000.0                  # (est)
+    streaming_multiprocessors: 160  # (est)
+    l2_cache_mb: 96                 # (est)
+    tdp_w: 1200                     # (est)
+    spec_confidence: estimated
+    in_model_scope: false
+    aliases:
+      - "NVIDIA B300-SXM-270GB"
+
+  # GB200 NVL module = 2× B200 GPU dies + 2× Grace CPUs.
+  # Per-module specs listed here; num_gpus normalization treats the module
+  # as the unit (matching how MLPerf system JSONs report accelerators_per_node).
+  - id: gb200
+    name: "NVIDIA GB200 NVL"
+    vendor: nvidia
+    architecture: blackwell
+    memory_type: hbm3e
+    vram_gb: 384                    # 2× 192 GB per NVL72 spec (est)
+    hbm_bandwidth_tbps: 16.0        # (est) 2× B200
+    peak_tflops:
+      fp32: 294.0                   # (est) 2× B200
+      bf16: 4500.0                  # (est) 2× B200
+      fp16: 4500.0                  # (est)
+      fp8:  9000.0                  # (est)
+      fp6:  ~
+      fp4:  18000.0                 # (est)
+      int8: 18000.0                 # (est)
+    streaming_multiprocessors: 320  # (est) 2× B200
+    l2_cache_mb: 192                # (est)
+    tdp_w: 2700                     # (est) full NVL module
+    spec_confidence: estimated
+    in_model_scope: false
+    aliases:
+      - "NVIDIA GB200"
+
+  - id: gb300
+    name: "NVIDIA GB300"
+    vendor: nvidia
+    architecture: blackwell
+    memory_type: hbm3e
+    vram_gb: 384                    # (est)
+    hbm_bandwidth_tbps: 16.0        # (est)
+    peak_tflops:
+      fp32: 294.0                   # (est)
+      bf16: 4500.0                  # (est)
+      fp16: 4500.0                  # (est)
+      fp8:  9000.0                  # (est)
+      fp6:  ~
+      fp4:  18000.0                 # (est)
+      int8: 18000.0                 # (est)
+    streaming_multiprocessors: 320  # (est)
+    l2_cache_mb: 192                # (est)
+    tdp_w: 2700                     # (est)
+    spec_confidence: estimated
+    in_model_scope: false
+    aliases:
+      - "NVIDIA GB300"
