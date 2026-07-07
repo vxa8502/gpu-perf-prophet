@@ -18,7 +18,7 @@ Predict throughput (tokens/sec) for major LLM workloads across AMD Instinct and 
 
 ## What it does
 
-1. **Forecasts** per-GPU inference throughput for 5 LLM models × 8 GPU SKUs using a roofline physics model corrected by XGBoost trained on MLPerf Inference v4.1–v6.0 (1,112 benchmark rows).
+1. **Forecasts** per-GPU inference throughput for 5 LLM models × 8 GPU SKUs using a roofline physics model corrected by XGBoost trained on MLPerf Inference v4.1–v6.0 plus self-run AMD Dev Cloud MI300X calibration (1,136 benchmark rows).
 2. **Recommends** GPUs via multi-objective Pareto ranking across throughput, cost-efficiency (tok/$), and VRAM headroom.
 3. **Covers AMD Instinct** MI300X, MI325X, MI355X alongside NVIDIA H100, H200, A100, L4, RTX 4090.
 
@@ -52,12 +52,12 @@ The app returns:
 
 | Metric | NVIDIA (H100, H200) | AMD (MI300X, MI325X, MI355X) |
 |--------|--------------------|-----------------------------|
-| Mean MAPE | ~21% | ~25% |
-| Spearman ρ | 0.885 | 0.598 |
-| Roofline violations | 0 / 461 rows | 0 / 188 rows |
+| Mean MAPE | ~20% | ~24% |
+| Spearman ρ | 0.902 | 0.713 |
+| Roofline violations | 0 / 461 rows | 0 / 212 rows |
 
 **Use for relative ranking and hardware shortlisting, not precise capacity planning.**  
-AMD predictions carry higher uncertainty due to smaller training corpus (188 vs 461 NVIDIA rows in MLPerf).
+AMD predictions carry higher uncertainty due to a smaller training corpus (212 vs 461 NVIDIA rows) and, for MI300X specifically, a mix of official MLPerf submissions and self-run calibration benchmarks run without serving-stack tuning — reported metrics score against official submissions only, calibration rows are used purely as extra training signal.
 
 ## Architecture
 
@@ -73,6 +73,7 @@ Key design principle borrowed from [NeuSight](https://arxiv.org/abs/2405.12031):
 ## Data sources
 
 - **MLPerf Inference results** v4.1, v5.0, v5.1, v6.0 — [mlcommons/inference_results_*](https://github.com/mlcommons)
+- **AMD Dev Cloud calibration** — 24 self-run vLLM benchmarks on MI300X (GPT-J, Llama 2 70B, Llama 3.1 8B, Mixtral 8×7B)
 - **GPU specs** — AMD and NVIDIA product pages (HBM bandwidth, TFLOPS, VRAM)
 - **Pricing** — static estimates as of June 2026 from cloud provider list prices
 
