@@ -2,7 +2,10 @@
 
 > **Status:** Hand-authored baseline. This file will be superseded once `build_data_card()`
 > is implemented and `make data` is run.
-> All figures verified against `data/processed/mlperf_raw.parquet` on 2026-06-12.
+> §1, §2's MLPerf figures, and §4 are verified against `data/processed/mlperf_raw.parquet`
+> on 2026-06-12. §2 also covers the AMD Dev Cloud calibration rows added 2026-07-07, which
+> are a separate provenance layered on top of the MLPerf corpus at the training-features
+> stage (`data/processed/mlperf_features.parquet`) — they never enter `mlperf_raw.parquet`.
 
 ---
 
@@ -32,25 +35,35 @@ Rows entering model training must pass the `gpu_in_model_scope == True` filter
 (set in `data/gpu_specs.yaml`). CPU-only, heterogeneous, edge, and other
 out-of-scope GPUs are excluded.
 
-**Total in-scope rows: 649**
+**Total MLPerf in-scope rows: 649** (2026-06-12). Plus 24 self-run AMD Dev Cloud MI300X
+calibration rows added 2026-07-07 — **total current in-scope rows: 673.**
 
 ### Per-GPU breakdown
 
-| Canonical ID | GPU | Vendor | Rounds present | In-scope rows | Spec confidence |
-|---|---|---|---|---|---|
-| `mi300x` | AMD Instinct MI300X | AMD | v4.1, v5.0, v5.1, v6.0 | 56 | verified |
-| `mi325x` | AMD Instinct MI325X | AMD | v5.0, v5.1, v6.0 | 82 | verified |
-| `mi355x` | AMD Instinct MI355X | AMD | **v6.0 only** | **50** | estimated |
-| `h100_sxm` | NVIDIA H100 SXM5 | NVIDIA | v4.1, v5.0, v5.1 | 178 | verified |
-| `h200_sxm` | NVIDIA H200 SXM | NVIDIA | v4.1, v5.0, v5.1 | 283 | verified |
+| Canonical ID | GPU | Vendor | Rounds present | MLPerf rows | Calibration rows | Total | Spec confidence |
+|---|---|---|---|---:|---:|---:|---|
+| `mi300x` | AMD Instinct MI300X | AMD | v4.1, v5.0, v5.1, v6.0 | 56 | 24 | **80** | verified |
+| `mi325x` | AMD Instinct MI325X | AMD | v5.0, v5.1, v6.0 | 82 | 0 | 82 | verified |
+| `mi355x` | AMD Instinct MI355X | AMD | **v6.0 only** | **50** | 0 | **50** | estimated |
+| `h100_sxm` | NVIDIA H100 SXM5 | NVIDIA | v4.1, v5.0, v5.1 | 178 | 0 | 178 | verified |
+| `h200_sxm` | NVIDIA H200 SXM | NVIDIA | v4.1, v5.0, v5.1 | 283 | 0 | 283 | verified |
 
-AMD total: **188 rows** (29 %)  
-NVIDIA total: **461 rows** (71 %)
+AMD total: **212 rows** (31 %)  
+NVIDIA total: **461 rows** (69 %)
 
 The AMD/NVIDIA imbalance is the reason the AMD-specific MAPE target is relaxed to
 < 20 % (vs. < 15 % overall).
 
-### Per-round in-scope row counts
+**Calibration provenance:** the 24 MI300X rows were self-run on the AMD Developer Cloud
+(vLLM 0.23.0, ROCm 7.2.4) covering `gptj`, `llama2-70b`, `llama3.1-8b`, and `mixtral-8x7b` —
+`gptj` and `llama3.1-8b` had **zero** official MLPerf MI300X submissions before this.
+These rows measure a genuinely different regime from official submissions (no
+serving-stack tuning — see `README.md` § Recommendation accuracy); model-quality metrics
+reported anywhere in this project score against official MLPerf rows only, with
+calibration rows used purely as additional training signal, never as evaluation ground
+truth.
+
+### Per-round in-scope row counts (MLPerf only; excludes calibration rows)
 
 | Round | mi300x | mi325x | mi355x | h100_sxm | h200_sxm | Round total |
 |-------|-------:|-------:|-------:|---------:|---------:|------------:|
@@ -91,7 +104,11 @@ This is the primary known limitation of the training corpus.
 3. **50 rows < 100-row minimum.** If MI355X does not meet the 100-row minimum gate
    after further AMD Dev Cloud calibration, it will be marked `enabled: false` in
    `gpu_specs.yaml` and excluded from v1 recommendations. The current value is
-   `in_model_scope: true` as a placeholder pending that gate.
+   `in_model_scope: true` as a placeholder pending that gate. **Until that gate is
+   built, the API/UI discloses the shortfall per-request instead:** MI300X, MI325X,
+   and MI355X (all under the 100-row floor) get `training_data_tier: "below_floor"`
+   rather than being presented with the same confidence as a well-covered GPU —
+   an interim, per-request disclosure, not a substitute for the hard gate above.
 
 4. **Estimated spec values.** `gpu_specs.yaml` MI355X entries for `peak_tflops` are
    `sparse/2` derivations (flagged `spec_confidence: estimated`). These **must be
@@ -100,12 +117,13 @@ This is the primary known limitation of the training corpus.
 
 ### Mitigation plan
 
-| Step | Action |
-|------|--------|
-| 1 | Train with MI355X included; report MI355X MAPE separately; note in model card |
-| 2 | Run MI300X + MI355X benchmarks on AMD Dev Cloud; add calibration rows |
-| 3 | If MI355X row count ≥ 100 → keep `enabled: true`; else set `enabled: false` |
-| 4 | Public writeup explicitly discloses the single-round limitation |
+| Step | Action | Status |
+|------|--------|--------|
+| 1 | Train with MI355X included; report MI355X MAPE separately; note in model card | Done |
+| 2 | Run MI300X + MI355X benchmarks on AMD Dev Cloud; add calibration rows | MI300X done (24 rows, 2026-07-07); MI355X not yet run — Dev Cloud access covers MI300X instances only |
+| 3 | If MI355X row count ≥ 100 → keep `enabled: true`; else set `enabled: false` | Still blocked — MI355X remains at 50 rows |
+| 4 | Public writeup explicitly discloses the single-round limitation | Done (`README.md`) |
+| 5 | Until step 3's hard gate exists, disclose per-GPU data sufficiency in every API/UI response rather than presenting uniform confidence | Done — `training_data_tier` field (`none`/`below_floor`/`sufficient`), 2026-07-11. Interim measure; does not replace step 3. |
 
 ---
 
@@ -184,7 +202,7 @@ submitted to different MLPerf rounds.
 
 | ID | Limitation | Impact | Mitigation |
 |----|-----------|--------|-----------|
-| KL-01 | **MI355X v6.0-only** — single round, one benchmark family, 50 rows | AMD MAPE for MI355X has higher variance; no multi-round consistency check | Further AMD Dev Cloud calibration; 100-row gate |
+| KL-01 | **MI355X v6.0-only** — single round, one benchmark family, 50 rows | AMD MAPE for MI355X has higher variance; no multi-round consistency check | Further AMD Dev Cloud calibration; 100-row gate. Not yet actionable — MI355X instances aren't available on the same Dev Cloud access used for MI300X. Interim: `training_data_tier: "below_floor"` discloses this per-request (§2 mitigation step 5). |
 | KL-02 | `precision` field is 0 % populated | Cannot distinguish FP8 vs FP16 directly | Use `benchmark_accuracy_tier` as proxy |
 | KL-03 | `tokens_per_sample` are rounded estimates | < 0.2 % systematic bias in `throughput_tok_per_sec_per_gpu` | Verified; rounding error is negligible |
 | KL-04 | AMD corpus is 29 % of in-scope rows | AMD predictions are lower-confidence than NVIDIA | Relaxed AMD MAPE gate (< 20 % vs < 15 %) |

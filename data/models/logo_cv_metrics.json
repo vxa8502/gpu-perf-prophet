@@ -1,0 +1,214 @@
+{
+  "generated_at": "2026-07-12T13:07:49.619349+00:00",
+  "source_notebook": "notebooks/03_model_training.ipynb",
+  "protocol": "LOGO-CV (Leave-One-GPU-Out); primary = in-scope folds (n>=10); official-only scoring where a fold mixes official MLPerf submissions with self-run calibration rows",
+  "primary": {
+    "n_folds": 5,
+    "mape": 0.23380974767055468,
+    "smape": 0.21164078416451165,
+    "median_ape": 0.18509508530648328,
+    "spearman_rho": 0.7888808863450961,
+    "worst_fold_rho": {
+      "gpu": "mi355x",
+      "rho": 0.5121800160905657
+    },
+    "worst_fold_mape": {
+      "gpu": "mi300x",
+      "mape": 0.4496798476393815
+    }
+  },
+  "vendor": {
+    "nvidia": {
+      "mape": 0.21373571232654986,
+      "smape": 0.23002982188975515,
+      "median_ape": 0.19212369651078004,
+      "rho": 0.8939945816961098,
+      "n_folds": 2
+    },
+    "amd": {
+      "mape": 0.24719243789989123,
+      "smape": 0.199381425681016,
+      "median_ape": 0.18040934450361876,
+      "rho": 0.7188050894444205,
+      "n_folds": 3
+    }
+  },
+  "per_fold": [
+    {
+      "gpu": "b200_sxm",
+      "vendor": "nvidia",
+      "n": 138,
+      "in_scope": false,
+      "in_agg": true,
+      "mape": 0.3374755307879345,
+      "smape": 0.29186819077474774,
+      "median_ape": 0.23694338395783016,
+      "spearman_rho": 0.8306123211824746
+    },
+    {
+      "gpu": "b300_sxm",
+      "vendor": "nvidia",
+      "n": 29,
+      "in_scope": false,
+      "in_agg": true,
+      "mape": 0.23684619061590245,
+      "smape": 0.2564624394530722,
+      "median_ape": 0.27144706467076973,
+      "spearman_rho": 0.818841138208717
+    },
+    {
+      "gpu": "gb200",
+      "vendor": "nvidia",
+      "n": 28,
+      "in_scope": false,
+      "in_agg": true,
+      "mape": 0.3098156351506685,
+      "smape": 0.2729216244084394,
+      "median_ape": 0.2036609681628041,
+      "spearman_rho": 0.7650111899500084
+    },
+    {
+      "gpu": "gb300",
+      "vendor": "nvidia",
+      "n": 11,
+      "in_scope": false,
+      "in_agg": true,
+      "mape": 0.17430911204008873,
+      "smape": 0.17393644610376116,
+      "median_ape": 0.14098983643432073,
+      "spearman_rho": 0.8571428571428571
+    },
+    {
+      "gpu": "gh200_144gb",
+      "vendor": "nvidia",
+      "n": 50,
+      "in_scope": false,
+      "in_agg": true,
+      "mape": 0.06831530675958356,
+      "smape": 0.07069476117842656,
+      "median_ape": 0.06896169387469567,
+      "spearman_rho": 0.8917469312909448
+    },
+    {
+      "gpu": "gh200_96gb",
+      "vendor": "nvidia",
+      "n": 26,
+      "in_scope": false,
+      "in_agg": true,
+      "mape": 0.09661322592006306,
+      "smape": 0.09941079345148354,
+      "median_ape": 0.09330221054708361,
+      "spearman_rho": 0.9177971765602133
+    },
+    {
+      "gpu": "h100_nvl",
+      "vendor": "nvidia",
+      "n": 46,
+      "in_scope": false,
+      "in_agg": true,
+      "mape": 0.5456500368887637,
+      "smape": 0.41980135638955235,
+      "median_ape": 0.4683624244793203,
+      "spearman_rho": 0.9145629925449604
+    },
+    {
+      "gpu": "h100_pcie",
+      "vendor": "nvidia",
+      "n": 24,
+      "in_scope": false,
+      "in_agg": true,
+      "mape": 0.3647269379714631,
+      "smape": 0.30970163452636484,
+      "median_ape": 0.24785922361578588,
+      "spearman_rho": 0.8454148471615721
+    },
+    {
+      "gpu": "h100_sxm",
+      "vendor": "nvidia",
+      "n": 178,
+      "in_scope": true,
+      "in_agg": true,
+      "mape": 0.23675355291273484,
+      "smape": 0.28349726152128213,
+      "median_ape": 0.23749937063846838,
+      "spearman_rho": 0.8961478340151705
+    },
+    {
+      "gpu": "h200_nvl",
+      "vendor": "nvidia",
+      "n": 52,
+      "in_scope": false,
+      "in_agg": true,
+      "mape": 0.23680727903776597,
+      "smape": 0.19338038678086072,
+      "median_ape": 0.16766815365958276,
+      "spearman_rho": 0.8654862039709149
+    },
+    {
+      "gpu": "h200_sxm",
+      "vendor": "nvidia",
+      "n": 283,
+      "in_scope": true,
+      "in_agg": true,
+      "mape": 0.1907178717403649,
+      "smape": 0.17656238225822818,
+      "median_ape": 0.1467480223830917,
+      "spearman_rho": 0.8918413293770491
+    },
+    {
+      "gpu": "l40s",
+      "vendor": "nvidia",
+      "n": 45,
+      "in_scope": false,
+      "in_agg": true,
+      "mape": 0.9042459165863032,
+      "smape": 0.5572620474803024,
+      "median_ape": 0.6657441551562934,
+      "spearman_rho": 0.6975573825353433
+    },
+    {
+      "gpu": "mi300x",
+      "vendor": "amd",
+      "n": 80,
+      "in_scope": true,
+      "in_agg": true,
+      "mape": 0.4496798476393815,
+      "smape": 0.32283498644102115,
+      "median_ape": 0.33939678840089643,
+      "spearman_rho": 0.7452002548867019
+    },
+    {
+      "gpu": "mi325x",
+      "vendor": "amd",
+      "n": 82,
+      "in_scope": true,
+      "in_agg": true,
+      "mape": 0.1590707712715832,
+      "smape": 0.1279615122994294,
+      "median_ape": 0.058077964040084584,
+      "spearman_rho": 0.8990349973559938
+    },
+    {
+      "gpu": "mi350x",
+      "vendor": "amd",
+      "n": 14,
+      "in_scope": false,
+      "in_agg": true,
+      "mape": 0.13799850100450334,
+      "smape": 0.11752693059503805,
+      "median_ape": 0.034923866028296384,
+      "spearman_rho": 0.01857182112864787
+    },
+    {
+      "gpu": "mi355x",
+      "vendor": "amd",
+      "n": 50,
+      "in_scope": true,
+      "in_agg": true,
+      "mape": 0.13282669478870904,
+      "smape": 0.14734777830259735,
+      "median_ape": 0.14375328106987523,
+      "spearman_rho": 0.5121800160905657
+    }
+  ]
+}

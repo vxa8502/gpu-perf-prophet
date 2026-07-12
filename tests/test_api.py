@@ -100,6 +100,47 @@ class TestPredict:
         data = r.json()
         assert data["pred_throughput_tok_per_sec"] <= data["roofline_tput_tok_per_sec"] + 1e-2
 
+    def test_has_training_data_survives_http_round_trip(self, client):
+        # FastAPI's response_model silently drops any dict key not declared
+        # on the Pydantic schema — a missing field here would never raise,
+        # it would just vanish over HTTP. Assert the actual JSON, not the
+        # Python dict predictor.predict() returns.
+        r = client.post("/predict", json={"gpu_id": "mi300x", "model_name": "gptj"})
+        assert r.status_code == 200
+        assert r.json()["has_training_data"] is True
+        # mi300x has real rows but sits under this project's 100-row-per-GPU floor.
+        assert r.json()["training_data_tier"] == "below_floor"
+
+        r = client.post("/predict", json={"gpu_id": "rtx4090", "model_name": "gptj"})
+        assert r.status_code == 200
+        assert r.json()["has_training_data"] is False
+        assert r.json()["training_data_tier"] == "none"
+
+        r = client.post("/predict", json={"gpu_id": "h100_sxm", "model_name": "gptj"})
+        assert r.status_code == 200
+        assert r.json()["has_training_data"] is True
+        assert r.json()["training_data_tier"] == "sufficient"
+
+    def test_memory_fit_fields_survive_http_round_trip(self, client):
+        r = client.post("/predict", json={"gpu_id": "mi300x", "model_name": "llama2-70b"})
+        assert r.status_code == 200
+        data = r.json()
+        for key in ("memory_fit_verdict", "kv_cache_gb", "memory_total_gb", "vram_utilization"):
+            assert key in data, f"{key} missing from HTTP response"
+        assert data["memory_fit_verdict"] in ("fits", "tight", "does_not_fit")
+
+    def test_batch_size_out_of_range_returns_422(self, client):
+        r = client.post("/predict", json={
+            "gpu_id": "mi300x", "model_name": "gptj", "batch_size": 0,
+        })
+        assert r.status_code == 422
+
+    def test_input_tokens_out_of_range_returns_422(self, client):
+        r = client.post("/predict", json={
+            "gpu_id": "mi300x", "model_name": "gptj", "input_tokens": 100_000,
+        })
+        assert r.status_code == 422
+
     def test_unknown_gpu_returns_422(self, client):
         r = client.post("/predict", json={
             "gpu_id": "titan_v",
@@ -122,6 +163,18 @@ class TestPredict:
         })
         assert r.status_code == 422
 
+    def test_unsupported_precision_returns_422(self, client):
+        # a100_sxm_80gb (Ampere) has no native FP8; accuracy_tier="99"
+        # selects fp8. Must return a structured 422, not a 200 with a silently
+        # substituted (and physically inconsistent) fp16-ceiling prediction.
+        r = client.post("/predict", json={
+            "gpu_id": "a100_sxm_80gb",
+            "model_name": "gptj",
+            "accuracy_tier": "99",
+        })
+        assert r.status_code == 422
+        assert "fp8" in r.json()["detail"]
+
     def test_defaults_filled(self, client):
         r = client.post("/predict", json={
             "gpu_id": "h200_sxm",
@@ -132,6 +185,43 @@ class TestPredict:
         assert data["scenario"] == "Offline"
         assert data["accuracy_tier"] == "99"
         assert data["framework"] == "vllm"
+
+    def test_memory_fit_defaults_filled(self, client):
+        # `memory_fit_verdict in (three valid strings)` is true unconditionally
+        # and would pass even if batch_size/input_tokens/output_tokens were
+        # never read at all — it doesn't prove DEFAULT_* was actually applied.
+        # Prove it two ways instead: (1) omitting the fields must match passing
+        # DEFAULT_BATCH_SIZE/DEFAULT_INPUT_TOKENS/DEFAULT_OUTPUT_TOKENS
+        # explicitly, byte-for-byte; (2) a different batch/token combo must
+        # change the numbers — ruling out a stub that ignores the field
+        # entirely but happens to also satisfy check (1) by coincidence.
+        from src.features.build_features import (
+            DEFAULT_BATCH_SIZE, DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS,
+        )
+
+        r_omitted = client.post("/predict", json={"gpu_id": "h200_sxm", "model_name": "gptj"})
+        r_explicit = client.post("/predict", json={
+            "gpu_id": "h200_sxm", "model_name": "gptj",
+            "batch_size": DEFAULT_BATCH_SIZE,
+            "input_tokens": DEFAULT_INPUT_TOKENS,
+            "output_tokens": DEFAULT_OUTPUT_TOKENS,
+        })
+        assert r_omitted.status_code == 200
+        assert r_explicit.status_code == 200
+        for key in ("memory_fit_verdict", "kv_cache_gb", "memory_total_gb", "vram_utilization"):
+            assert r_omitted.json()[key] == r_explicit.json()[key], (
+                f"{key}: omitting batch/token fields ({r_omitted.json()[key]!r}) diverged from "
+                f"passing DEFAULT_* explicitly ({r_explicit.json()[key]!r})"
+            )
+
+        r_different = client.post("/predict", json={
+            "gpu_id": "h200_sxm", "model_name": "gptj",
+            "batch_size": 1, "input_tokens": 64, "output_tokens": 1,
+        })
+        assert r_different.json()["kv_cache_gb"] != r_omitted.json()["kv_cache_gb"], (
+            "kv_cache_gb didn't change with a different batch/token combo — "
+            "batch_size/input_tokens/output_tokens may not actually be wired in"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +285,80 @@ class TestRecommend:
         assert wl["accuracy_tier"] == "base"
         assert wl["framework"] == "rocm_other"
 
-    def test_budget_filter_in_recommend(self, client):
+    def test_ranking_objective_echoed_and_defaults_to_tokens_per_dollar(self, client):
+        r = client.post("/recommend", json={"model_name": "gptj"})
+        assert r.status_code == 200
+        assert r.json()["workload"]["ranking_objective"] == "tokens_per_dollar"
+
+    def test_ranking_objective_override_echoed(self, client):
+        r = client.post("/recommend", json={
+            "model_name": "gptj", "ranking_objective": "tokens_per_watt",
+        })
+        assert r.status_code == 200
+        assert r.json()["workload"]["ranking_objective"] == "tokens_per_watt"
+
+    def test_invalid_ranking_objective_rejected_before_recommender(self, client):
+        # Pydantic's Literal type rejects this before GpuRecommender.recommend()
+        # is ever called — a clean 422, same convention as scenario/accuracy_tier.
+        r = client.post("/recommend", json={
+            "model_name": "gptj", "ranking_objective": "most_tokens_ever",
+        })
+        assert r.status_code == 422
+
+    def test_watts_tokens_per_watt_cost_per_million_present_over_http(self, client):
+        # watts/tokens_per_watt/cost_per_million_tokens fields — asserted over a real HTTP round-trip, not
+        # just the internal dict, since response_model silently drops any
+        # key GpuResult doesn't declare (the same risk class as
+        # has_training_data).
+        #
+        # tokens_per_watt/cost_per_million_tokens are checked against an
+        # independent /predict call for mi300x (gpu_specs.yaml tdp_w=750),
+        # not against this same response's own "throughput"/"price_per_gpu_hr"
+        # fields — mutation-testing this test directly found reusing
+        # the response's own throughput to build "expected" doesn't catch a
+        # bug where throughput itself is wrong (e.g. wired to
+        # roofline_tput_tok_per_sec instead of the real prediction): both the
+        # asserted field and its "expected" counterpart move together and the
+        # test stays green.
+        r = client.post("/recommend", json={"model_name": "gptj", "accuracy_tier": "99"})
+        assert r.status_code == 200
+        candidates = r.json()["frontier"] + r.json()["dominated"]
+        assert len(candidates) > 0
+        for gpu in candidates:
+            assert gpu["watts"] is not None and gpu["watts"] > 0
+            assert gpu["cost_per_million_tokens"] > 0
+
+        mi300x = next(g for g in candidates if g["gpu_id"] == "mi300x")
+        assert mi300x["watts"] == 750
+        standalone = client.post(
+            "/predict", json={"gpu_id": "mi300x", "model_name": "gptj", "accuracy_tier": "99"},
+        ).json()
+        real_tput = standalone["pred_throughput_tok_per_sec"]
+        assert mi300x["throughput"] == pytest.approx(real_tput)
+        assert mi300x["tokens_per_watt"] == pytest.approx(real_tput / 750)
+
+    def test_memory_fit_inputs_echoed_in_workload(self, client):
         r = client.post("/recommend", json={
             "model_name": "gptj",
+            "batch_size": 8,
+            "input_tokens": 512,
+            "output_tokens": 128,
+        })
+        assert r.status_code == 200
+        wl = r.json()["workload"]
+        assert wl["batch_size"] == 8
+        assert wl["input_tokens"] == 512
+        assert wl["output_tokens"] == 128
+
+    def test_budget_filter_in_recommend(self, client):
+        # Light batch/context override keeps the KV cache small enough that
+        # L4/RTX4090 (24 GB) still fit gptj — the default batch=32/2048-token
+        # assumption needs ~25 GB and would exclude both.
+        r = client.post("/recommend", json={
+            "model_name": "gptj",
+            "batch_size": 1,
+            "input_tokens": 128,
+            "output_tokens": 64,
             "budget_per_gpu_hr": 1.0,
         })
         assert r.status_code == 200
@@ -213,6 +374,42 @@ class TestRecommend:
         for gpu in candidates:
             assert gpu["price_per_gpu_hr"] <= 1.0
 
+    def test_cheap_budget_top_pick_flagged_over_http(self, client):
+        # Same silent-field-drop risk as /predict, plus this is the actual
+        # scenario that motivated the feature: a tight-budget query's top
+        # pick is a GPU with zero real training rows.
+        r = client.post("/recommend", json={
+            "model_name": "gptj",
+            "batch_size": 1,
+            "input_tokens": 128,
+            "output_tokens": 64,
+            "budget_per_gpu_hr": 1.0,
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["frontier"], "Expected at least one candidate under $1.00/hr"
+        assert body["frontier"][0]["gpu_id"] == "rtx4090"
+        assert body["frontier"][0]["has_training_data"] is False
+        assert body["frontier"][0]["training_data_tier"] == "none"
+        for gpu in body["frontier"] + body["dominated"] + body["filtered"]:
+            assert "has_training_data" in gpu
+            assert "training_data_tier" in gpu
+
     def test_unknown_model_returns_422(self, client):
         r = client.post("/recommend", json={"model_name": "invalid_model"})
         assert r.status_code == 422
+
+    def test_unsupported_precision_gpu_filtered_not_500(self, client):
+        # Unsupported-precision handling in the recommend() multi-GPU path: a100_sxm_80gb (no native
+        # FP8) must be excluded with a reason, not cause a 500 by reaching
+        # predict_batch() (which now raises for this case).
+        r = client.post("/recommend", json={
+            "model_name": "gptj",
+            "accuracy_tier": "99",
+        })
+        assert r.status_code == 200
+        body = r.json()
+        candidate_ids = {g["gpu_id"] for g in body["frontier"] + body["dominated"]}
+        assert "a100_sxm_80gb" not in candidate_ids
+        entry = next(f for f in body["filtered"] if f["gpu_id"] == "a100_sxm_80gb")
+        assert "fp8" in entry["reject_reason"]

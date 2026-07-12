@@ -8,7 +8,7 @@
 #                  "estimated"  → derived from architecture docs or cross-refs;
 #                                 verify before Phase-2 training freeze
 #
-# peak_tflops are DENSE (no structured sparsity) per design doc ADR-006.
+# peak_tflops are DENSE (no structured sparsity), a deliberate design choice.
 # AMD "compute" throughput uses MFMA instruction peak.
 # NVIDIA "compute" throughput uses Tensor Core peak for BF16/FP16/FP8;
 #   fp32 is scalar CUDA-core throughput.
@@ -132,7 +132,7 @@ gpus:
     l2_cache_mb: 32                 # (est)
     tdp_w: 1000                     # AMD official spec sheet — air-cooled 1000W variant (vs MI355X 1400W)
     spec_confidence: verified       # confirmed 2026-06-18 against AMD official spec sheet (amd-instinct-mi350x-gpu-brochure.pdf); bf16/fp6/fp4 derived from confirmed fp8 using CDNA4 ratios
-    in_model_scope: false           # spec gate cleared (S33); scope gate blocked: LOGO-CV ρ=0.019 (14 rows, 35 rounds) — wait for v7.0+ MLPerf data
+    in_model_scope: false           # spec is verified but scope gate is blocked: LOGO-CV ρ=0.019 (14 rows, 35 rounds) — wait for v7.0+ MLPerf data
     aliases:
       - "AMD Instinct MI350X"
       - "AMD Instinct MI350X 288GB HBM3e"

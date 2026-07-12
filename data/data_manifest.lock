@@ -1,0 +1,36 @@
+sources:
+  mlperf_v4_1:
+    type: git
+    path: data/raw/mlperf/v4.1
+    url: https://github.com/mlcommons/inference_results_v4.1.git
+    commit: 198fc46799b3328b36ee4bcbdebfa2db5a8e6183
+    snapshot_date: '2025-07-24'
+    present: true
+  mlperf_v5_0:
+    type: git
+    path: data/raw/mlperf/v5.0
+    url: https://github.com/mlcommons/inference_results_v5.0.git
+    commit: 0bc17ab3f4b33f730d7869e04cc29cb70835e513
+    snapshot_date: '2026-01-25'
+    present: true
+  mlperf_v5_1:
+    type: git
+    path: data/raw/mlperf/v5.1
+    url: https://github.com/mlcommons/inference_results_v5.1.git
+    commit: 5ea4f62ef62536e6bf4d78a9b440fb9035ddfb4a
+    snapshot_date: '2026-01-16'
+    present: true
+  mlperf_v6_0:
+    type: git
+    path: data/raw/mlperf/v6.0
+    url: https://github.com/mlcommons/inference_results_v6.0.git
+    commit: 4d3916ac9cf474b679cdfcf492d43a0559418ad1
+    snapshot_date: '2026-04-03'
+    present: true
+  mi300x_calibration:
+    type: file
+    path: benchmarks/mi300x_calibration_results.csv
+    url: self_run:amd_dev_cloud
+    sha256: cb90f729c57b0d58bd2121332bf2bb8607f13802e4b49e88db0e61245db1bcd1
+    snapshot_date: null
+    present: true

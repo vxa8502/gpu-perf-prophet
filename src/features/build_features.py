@@ -54,6 +54,28 @@ MODEL_PARAMS: dict[str, tuple[float, float]] = {
     "mixtral-8x7b":  (46.7,  14.1),   # (total, active)
 }
 
+# benchmark_base → (n_layers, n_kv_heads, head_dim) attention architecture,
+# needed for KV-cache sizing. Not derivable from MLPerf rows —
+# sourced from each model's published config.json / paper. GQA models
+# (n_kv_heads < n_heads) have a proportionally smaller KV cache than MHA.
+#
+# Sources:
+#   llama2-70b    : meta-llama/Llama-2-70b-hf config.json — GQA, n_kv_heads=8
+#   llama3.1-405b : meta-llama/Llama-3.1-405B config.json — GQA, n_kv_heads=8
+#   llama3.1-8b   : meta-llama/Llama-3.1-8B config.json — GQA, n_kv_heads=8
+#   gptj          : EleutherAI/gpt-j-6b config.json — MHA, n_kv_heads=16, head_dim=256
+#   mixtral-8x7b  : mistralai/Mixtral-8x7B-v0.1 config.json — MoE only changes
+#                   the FFN, not attention; KV-cache math is identical to a
+#                   dense 32-layer/8-kv-head/128-head-dim model. No sliding
+#                   window (unlike base Mistral 7B v0.1).
+MODEL_ARCH: dict[str, tuple[int, int, int]] = {
+    "llama2-70b":    (80,  8,  128),
+    "llama3.1-405b": (126, 8,  128),
+    "llama3.1-8b":   (32,  8,  128),
+    "gptj":          (28,  16, 256),
+    "mixtral-8x7b":  (32,  8,  128),
+}
+
 # benchmark_accuracy_tier → precision label used to select peak TFLOPS
 # and compute bytes-per-param.
 #
@@ -62,7 +84,11 @@ MODEL_PARAMS: dict[str, tuple[float, float]] = {
 # "base" has the loosest constraint      → BF16 (widely supported baseline).
 #
 # If the selected precision is not supported on a GPU (peak column is NaN or
-# None), _select_peak_tflops falls back to FP16.
+# None), _select_peak_tflops falls back to FP16 for TRAINING-DATA ingestion
+# only (a real submitted MLPerf row scored against the nearest available
+# ceiling). The live serving path (predictor.py/recommender.py) must NOT do
+# this — it must raise an explicit "unsupported precision" error instead of
+# a silent substitution; see gpu_supports_precision() below.
 TIER_TO_PRECISION: dict[str, str] = {
     "99.9": "fp16",
     "99":   "fp8",
@@ -173,6 +199,130 @@ def roofline_ceilings(
     return bw_ceil, compute_ceil, compute_ceil
 
 
+# Default batch/context-length assumption for KV-cache sizing.
+# MLPerf submission rows carry no per-row batch size or context length, so
+# this can't be learned from training data the way efficiency_ratio is — it's
+# a stated assumption, overridable per-request, in the same spirit as the
+# static pricing snapshot. batch=32/in=2048/out=256 represents a
+# moderately loaded Offline-scenario batched-serving workload.
+DEFAULT_BATCH_SIZE: int = 32
+DEFAULT_INPUT_TOKENS: int = 2048
+DEFAULT_OUTPUT_TOKENS: int = 256
+
+MIN_BATCH_SIZE, MAX_BATCH_SIZE = 1, 256
+MIN_INPUT_TOKENS, MAX_INPUT_TOKENS = 64, 8192
+MIN_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS = 1, 4096
+
+# Outlier-rejection bound on efficiency_ratio: a row outside
+# (0, MAX_EFFICIENCY_RATIO] signals a spec-DB or parse error (e.g. the
+# precision-proxy mismatch that drove pre-FP8-override AMD 99.9-tier rows to
+# ~1.35) and is dropped rather than silently trained on. Values in (1.0, 1.2]
+# are still kept — see the diagnostic-only warning in build_training_df,
+# which explains why efficiency_ratio > 1.0 alone is not itself an error.
+MAX_EFFICIENCY_RATIO: float = 1.2
+
+# 10% activation/framework overhead on top of weights + KV cache,
+# aligned with vLLM's default --gpu-memory-utilization 0.90.
+MEMORY_OVERHEAD_FACTOR: float = 1.10
+
+# Verdict thresholds on VRAM utilization. does_not_fit is a hard
+# exclusion; tight is a disclosure-only flag — the workload is
+# expected to run but with little headroom for allocator fragmentation.
+_FITS_MAX_UTIL: float = 0.90
+_TIGHT_MAX_UTIL: float = 0.98
+
+# The only values memory_fit_verdict() ever returns. Single source of truth
+# so callers can assert closed-set membership without hardcoding the three
+# strings again (mirrors VALID_FRAMEWORKS/_normalize_framework).
+VALID_MEMORY_FIT_VERDICTS: frozenset[str] = frozenset({"fits", "tight", "does_not_fit"})
+
+
+def validate_serving_shape(batch_size: int, input_tokens: int, output_tokens: int) -> None:
+    """Raise ValueError if batch_size/input_tokens/output_tokens are out of range.
+
+    Single source of truth for this range check, called by both
+    GpuPredictor.predict()/predict_batch() and GpuRecommender.recommend() so
+    the two public entry points enforce the same input contract. Before this
+    existed, recommend() applied no range check at all — an out-of-range
+    batch_size that happened to make every in-scope GPU look like
+    "does_not_fit" would return a normal-looking response instead of raising,
+    while the exact same value passed to predict() always raised.
+    """
+    if not (MIN_BATCH_SIZE <= batch_size <= MAX_BATCH_SIZE):
+        raise ValueError(
+            f"Invalid batch_size {batch_size!r}. "
+            f"Valid range: [{MIN_BATCH_SIZE}, {MAX_BATCH_SIZE}]"
+        )
+    if not (MIN_INPUT_TOKENS <= input_tokens <= MAX_INPUT_TOKENS):
+        raise ValueError(
+            f"Invalid input_tokens {input_tokens!r}. "
+            f"Valid range: [{MIN_INPUT_TOKENS}, {MAX_INPUT_TOKENS}]"
+        )
+    if not (MIN_OUTPUT_TOKENS <= output_tokens <= MAX_OUTPUT_TOKENS):
+        raise ValueError(
+            f"Invalid output_tokens {output_tokens!r}. "
+            f"Valid range: [{MIN_OUTPUT_TOKENS}, {MAX_OUTPUT_TOKENS}]"
+        )
+
+
+def kv_cache_gb(
+    n_layers: int,
+    n_kv_heads: int,
+    head_dim: int,
+    batch_size: int,
+    input_tokens: int,
+    output_tokens: int,
+    bytes_per_value: float,
+) -> float:
+    """KV-cache size in GB for one batch at the given context length.
+
+    2 (K and V) x batch x seq_len x n_layers x n_kv_heads x head_dim x bytes.
+    GQA models (n_kv_heads < n_heads) shrink this proportionally — the
+    reduction that makes GQA cheap to serve.
+    """
+    seq_len = input_tokens + output_tokens
+    kv_bytes = (
+        2 * batch_size * seq_len * n_layers * n_kv_heads * head_dim * bytes_per_value
+    )
+    return kv_bytes / 1e9
+
+
+def memory_fit_verdict(
+    weights_gb: float,
+    kv_gb: float,
+    vram_gb: float,
+) -> tuple[str, float, float]:
+    """Return (verdict, total_gb, utilization).
+
+    verdict is one of "fits" (util <= 0.90), "tight" (<= 0.98), or
+    "does_not_fit" (> 0.98).
+    """
+    total_gb = (weights_gb + kv_gb) * MEMORY_OVERHEAD_FACTOR
+    utilization = total_gb / vram_gb
+    if utilization <= _FITS_MAX_UTIL:
+        verdict = "fits"
+    elif utilization <= _TIGHT_MAX_UTIL:
+        verdict = "tight"
+    else:
+        verdict = "does_not_fit"
+    return verdict, total_gb, utilization
+
+
+def cost_per_million_tokens(
+    price_per_gpu_hr: Optional[float],
+    tokens_per_sec: float,
+) -> Optional[float]:
+    """USD per 1M tokens served: (usd_per_hour / 3600) / (tok/s / 1e6).
+
+    Returns None when price is unknown or throughput is non-positive (a
+    does_not_fit / precision-rejected candidate) — undefined, not zero or an
+    error, matching cost_efficiency's existing None-for-unpriced convention.
+    """
+    if price_per_gpu_hr is None or tokens_per_sec <= 0:
+        return None
+    return (price_per_gpu_hr / 3600.0) / (tokens_per_sec / 1_000_000.0)
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -187,13 +337,36 @@ def _normalize_framework(raw: Optional[str]) -> str:
 
 
 def _select_peak_tflops(row: pd.Series, precision: str) -> Optional[float]:
-    """Return the peak TFLOPS for `precision`, falling back to fp16 if absent."""
+    """Return the peak TFLOPS for `precision`, falling back to fp16 if absent.
+
+    Training-data ingestion only — see the note on gpu_supports_precision().
+    """
     col = _PRECISION_TO_COL.get(precision)
     val = row.get(col) if col else None
     if val is None or (isinstance(val, float) and pd.isna(val)):
         # GPU doesn't support this precision natively — fall back to fp16.
         val = row.get("gpu_peak_fp16_tflops")
     return val
+
+
+def gpu_supports_precision(gpu_spec: dict, precision: str) -> bool:
+    """Whether gpu_spec's peak_tflops table has a real (non-null) entry for `precision`.
+
+    Single source of truth for the rule that when a GPU does not support the
+    requested precision, callers must report an unsupported precision error
+    rather than silently substituting another precision. `gpu_specs.yaml` encodes
+    non-support as `~` (YAML null) on the relevant `peak_tflops` key — e.g.
+    `a100_sxm_80gb.peak_tflops.fp8: ~` because Ampere has no native FP8 Tensor
+    Core path. Called by both GpuPredictor and GpuRecommender before a
+    prediction is built, so neither entry point can silently substitute one
+    precision's compute ceiling for another's.
+    """
+    peak = (gpu_spec.get("peak_tflops") or {}).get(precision)
+    if peak is None:
+        return False
+    if isinstance(peak, float) and pd.isna(peak):
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +503,35 @@ def build_training_df(
             n_violations,
             100 * n_violations / len(df),
         )
+
+    # Outlier-rejection rule: drop rows whose efficiency_ratio falls
+    # outside (0, MAX_EFFICIENCY_RATIO] — including NaN/inf from a zero or
+    # missing roofline_tput. This is a hard bound, unlike the >1.0 warning
+    # above: ratios up to MAX_EFFICIENCY_RATIO are expected precision-proxy
+    # noise (kept), but anything past it indicates a spec-DB or parse error,
+    # not a training signal.
+    # .notna() is technically redundant with `> 0` here — NaN comparisons are
+    # always False under IEEE 754, so `efficiency_ratio > 0` alone already
+    # excludes NaN, and +inf/-inf are separately excluded by the upper/lower
+    # bound respectively (confirmed by mutation testing, 2026-07-12). Kept
+    # explicit anyway so the condition reads correctly without the reader
+    # having to know that NaN-comparison semantics are doing double duty.
+    valid_ratio = (
+        df["efficiency_ratio"].notna()
+        & (df["efficiency_ratio"] > 0)
+        & (df["efficiency_ratio"] <= MAX_EFFICIENCY_RATIO)
+    )
+    if (~valid_ratio).any():
+        dropped = df.loc[~valid_ratio, "efficiency_ratio"]
+        log.warning(
+            "Dropping %d rows with efficiency_ratio outside (0, %.1f] "
+            "(sample values: %s) — outlier-rejection rule; likely a "
+            "spec-DB or parse error, not valid training signal.",
+            len(dropped),
+            MAX_EFFICIENCY_RATIO,
+            sorted(dropped.round(3).tolist())[:10],
+        )
+        df = df[valid_ratio]
 
     log.info("build_training_df complete: %d rows, %d columns", len(df), df.shape[1])
     return df.reset_index(drop=True)

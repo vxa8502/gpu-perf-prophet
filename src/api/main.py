@@ -163,6 +163,9 @@ def predict(req: PredictRequest) -> dict:
             scenario=req.scenario,
             accuracy_tier=req.accuracy_tier,
             framework=req.framework,
+            batch_size=req.batch_size,
+            input_tokens=req.input_tokens,
+            output_tokens=req.output_tokens,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -188,8 +191,12 @@ def recommend(req: RecommendRequest) -> dict:
             scenario=req.scenario,
             accuracy_tier=req.accuracy_tier,
             framework=req.framework,
+            batch_size=req.batch_size,
+            input_tokens=req.input_tokens,
+            output_tokens=req.output_tokens,
             budget_per_gpu_hr=req.budget_per_gpu_hr,
             min_throughput_tok_per_sec=req.min_throughput_tok_per_sec,
+            ranking_objective=req.ranking_objective,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

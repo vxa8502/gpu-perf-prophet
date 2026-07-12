@@ -10,6 +10,20 @@ from pydantic import BaseModel, Field, field_validator
 Scenario      = Literal["Offline", "Server"]
 AccuracyTier  = Literal["base", "99", "99.9"]
 Framework     = Literal["vllm", "tensorrt", "rocm_other", "other"]
+# Unlike Scenario/AccuracyTier/Framework, this has no request-side counterpart
+# to validate against — it's entirely server-computed (build_features.memory_fit_verdict)
+# — so it's typed as a Literal here rather than the plain `str` used elsewhere
+# for fields that just echo back already-validated request input.
+MemoryFitVerdict = Literal["fits", "tight", "does_not_fit"]
+# Same shape as MemoryFitVerdict above: server-computed from the trained
+# model's per-GPU row counts (GpuPredictor.training_data_tier), not echoed
+# request input.
+TrainingDataTier = Literal["none", "below_floor", "sufficient"]
+# The four named ranking scalars — request-side counterpart validated
+# against recommender.VALID_RANKING_OBJECTIVES.
+RankingObjective = Literal[
+    "tokens_per_dollar", "tokens_per_second", "tokens_per_watt", "lowest_cost_per_million_tokens"
+]
 
 
 class PredictRequest(BaseModel):
@@ -18,6 +32,12 @@ class PredictRequest(BaseModel):
     scenario:      Scenario     = "Offline"
     accuracy_tier: AccuracyTier = "99"
     framework:     Framework    = "vllm"
+    # KV-cache memory-fit inputs only — not ML features. MLPerf
+    # rows carry no per-row batch/context length, so these are stated,
+    # overridable assumptions; defaults mirror build_features.DEFAULT_*.
+    batch_size:    int = Field(32,   ge=1,  le=256)
+    input_tokens:  int = Field(2048, ge=64, le=8192)
+    output_tokens: int = Field(256,  ge=1,  le=4096)
 
 
 class PredictResponse(BaseModel):
@@ -29,8 +49,24 @@ class PredictResponse(BaseModel):
     pred_throughput_tok_per_sec:   float
     roofline_tput_tok_per_sec:     float
     efficiency_ratio:              float
-    vram_fits:                     bool
+    vram_fits:                     bool = Field(
+        description="True unless memory_fit_verdict is 'does_not_fit' — i.e. "
+                     "true for both 'fits' and 'tight'. Check memory_fit_verdict "
+                     "for the three-tier detail; a 'tight' GPU is expected to run "
+                     "but with little headroom for allocator fragmentation."
+    )
+    memory_fit_verdict:            MemoryFitVerdict
+    kv_cache_gb:                   float
+    memory_total_gb:               float
+    vram_utilization:              float
     model_size_gb:                 float
+    has_training_data:             bool = Field(
+        description="True unless training_data_tier is 'none'. Check "
+                     "training_data_tier for whether that data actually clears "
+                     "this project's 100-row-per-GPU reliability floor — "
+                     "'below_floor' GPUs have real data but less than 'sufficient' ones."
+    )
+    training_data_tier:            TrainingDataTier
 
 
 class RecommendRequest(BaseModel):
@@ -38,8 +74,17 @@ class RecommendRequest(BaseModel):
     scenario:                  Scenario     = "Offline"
     accuracy_tier:             AccuracyTier = "99"
     framework:                 Framework    = "vllm"
+    batch_size:                int = Field(32,   ge=1,  le=256)
+    input_tokens:              int = Field(2048, ge=64, le=8192)
+    output_tokens:             int = Field(256,  ge=1,  le=4096)
     budget_per_gpu_hr:         Optional[float] = Field(None, gt=0, examples=[4.0])
     min_throughput_tok_per_sec: Optional[float] = Field(None, gt=0)
+    ranking_objective:         RankingObjective = Field(
+        "tokens_per_dollar",
+        description="Scalar the Pareto-optimal (rank-1) set is sorted by. "
+                     "'tokens_per_watt' and 'lowest_cost_per_million_tokens' need "
+                     "TDP/pricing data respectively — entries missing it sort last.",
+    )
 
     @field_validator("budget_per_gpu_hr", "min_throughput_tok_per_sec", mode="before")
     @classmethod
@@ -58,13 +103,42 @@ class GpuResult(BaseModel):
     pred_throughput_tok_per_sec: float
     roofline_tput_tok_per_sec:   float
     efficiency_ratio:            float
-    vram_fits:                   bool
+    vram_fits:                   bool = Field(
+        description="True unless memory_fit_verdict is 'does_not_fit' — i.e. "
+                     "true for both 'fits' and 'tight'. Check memory_fit_verdict "
+                     "for the three-tier detail; a 'tight' GPU is expected to run "
+                     "but with little headroom for allocator fragmentation."
+    )
+    memory_fit_verdict:          MemoryFitVerdict
+    kv_cache_gb:                 float
+    memory_total_gb:             float
+    vram_utilization:            float
     model_size_gb:               float
+    has_training_data:           bool = Field(
+        description="True unless training_data_tier is 'none'. Check "
+                     "training_data_tier for whether that data actually clears "
+                     "this project's 100-row-per-GPU reliability floor — "
+                     "'below_floor' GPUs have real data but less than 'sufficient' ones."
+    )
+    training_data_tier:          TrainingDataTier
     vram_gb:                     Optional[float]
     price_per_gpu_hr:            Optional[float]
     vram_headroom:               float
     cost_efficiency:             Optional[float]
     throughput:                  float
+    watts:                       Optional[float] = Field(
+        description="GPU TDP in watts (gpu_specs.yaml tdp_w), the third Pareto "
+                     "axis — None only if a future SKU ships with no "
+                     "recorded TDP."
+    )
+    tokens_per_watt:             Optional[float] = Field(
+        description="pred_throughput_tok_per_sec / watts. None when watts is "
+                     "unknown or throughput is 0 (a filtered/rejected entry)."
+    )
+    cost_per_million_tokens:     Optional[float] = Field(
+        description="USD per 1M tokens served. None when price is "
+                     "unknown or throughput is 0 (a filtered/rejected entry)."
+    )
 
 
 class FilteredGpuResult(GpuResult):
@@ -77,8 +151,12 @@ class WorkloadSummary(BaseModel):
     accuracy_tier:             str
     framework:                 str
     model_size_gb:             float
+    batch_size:                int
+    input_tokens:              int
+    output_tokens:             int
     budget_per_gpu_hr:         Optional[float]
     min_throughput_tok_per_sec: Optional[float]
+    ranking_objective:         RankingObjective
 
 
 class RecommendResponse(BaseModel):
