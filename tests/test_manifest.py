@@ -1,11 +1,4 @@
-"""
-Tests for src/data/manifest.py (data manifest).
-
-Strategy: build tiny synthetic git repos and a synthetic calibration CSV
-under tmp_path (never touch the real data/raw/mlperf mirrors or the real
-data/data_manifest.lock), and monkeypatch the module's path constants to
-point at them.
-"""
+"""Tests for src/data/manifest.py: uses synthetic git repos/CSVs under tmp_path (never the real data/raw/mlperf mirrors or data_manifest.lock), monkeypatched into the module's path constants."""
 
 from __future__ import annotations
 
@@ -70,9 +63,7 @@ class TestFileSha256:
         assert manifest._file_sha256(tmp_path / "does_not_exist.txt") is None
 
     def test_refuses_symlinked_file(self, tmp_path):
-        """A symlinked calibration CSV must not be silently hashed — its
-        target could be attacker-controlled content masquerading as the
-        real, tracked file."""
+        """A symlinked calibration CSV must not be silently hashed — its target could be attacker-controlled content masquerading as the real file."""
         real = tmp_path / "real.csv"
         real.write_text("real calibration content")
         link = tmp_path / "link.csv"
@@ -89,9 +80,7 @@ class TestFileSha256:
 
 
 class TestCorpusSha256:
-    """corpus_sha256() hashes a built training corpus file for the
-    model sidecar's corpus_sha256 field — same guards as _file_sha256, just
-    against the larger _MAX_CORPUS_BYTES cap instead of _MAX_HASHED_FILE_BYTES."""
+    """corpus_sha256() hashes a training corpus for the model sidecar's corpus_sha256 field, using the larger _MAX_CORPUS_BYTES cap instead of _MAX_HASHED_FILE_BYTES."""
 
     def test_matches_hashlib(self, tmp_path):
         p = tmp_path / "corpus.parquet"
@@ -112,9 +101,7 @@ class TestCorpusSha256:
             manifest.corpus_sha256(link)
 
     def test_uses_corpus_cap_not_hashed_file_cap(self, tmp_path, monkeypatch):
-        """A corpus larger than _MAX_HASHED_FILE_BYTES (1 MB) must still hash
-        fine as long as it's under _MAX_CORPUS_BYTES — proves corpus_sha256
-        really uses the larger cap, not the lock-file/calibration-CSV one."""
+        """A corpus over _MAX_HASHED_FILE_BYTES but under _MAX_CORPUS_BYTES must still hash — proves corpus_sha256 uses the larger cap, not the lock-file/calibration-CSV one."""
         monkeypatch.setattr(manifest, "_MAX_HASHED_FILE_BYTES", 10)
         p = tmp_path / "corpus.parquet"
         p.write_bytes(b"this is more than ten bytes of fake corpus content")
@@ -152,22 +139,13 @@ class TestComputeManifest:
         assert m["sources"]["mi300x_calibration"]["sha256"] is not None
 
     def test_commit_and_snapshot_date_from_combined_git_log_call(self, fixture_env):
-        """commit + snapshot_date are derived from one `git log --format=%H\\x1f%cI`
-        call (perf fix: was two separate subprocess spawns — rev-parse HEAD and
-        log --format=%cI). Confirms the split still yields the *right* values,
-        not just correctly-shaped ones — a regex-only date-format check would
-        pass even if snapshot_date were a hardcoded, wrong-but-valid-looking
-        date (caught by mutation-testing this exact test: hardcoding
-        commit_date to "1970-01-01T..." kept a format-only version of this
-        test green)."""
+        """commit + snapshot_date come from one combined `git log --format=%H\\x1f%cI` call (perf fix replacing two subprocess spawns); asserts real values not just shape — mutation-testing caught a hardcoded "1970-01-01..." date passing a format-only version of this test."""
         m = manifest.compute_manifest()
         entry = m["sources"]["mlperf_v6_0"]
         assert entry["commit"] == fixture_env["commit_sha"]
         assert len(entry["commit"]) == 40  # full SHA-1 hex, not truncated by the split
 
-        # Independently derive the expected date via a fresh subprocess call
-        # (not manifest._run_git / _mlperf_source) so a bug in the module's
-        # own combined-call parsing can't also poison the "expected" value.
+        # Derive the expected date via a fresh subprocess call (not manifest._run_git) so a module parsing bug can't also poison the "expected" value.
         expected_iso = subprocess.run(
             ["git", "-C", str(fixture_env["round_dir"]), "log", "-1", "--format=%cI"],
             check=True, capture_output=True, text=True,
@@ -175,16 +153,7 @@ class TestComputeManifest:
         assert entry["snapshot_date"] == expected_iso[:10]
 
     def test_malformed_git_log_output_yields_none_fields_not_a_crash(self, tmp_path, monkeypatch):
-        """If `_run_git` ever returns output without the \\x1f separator
-        (e.g. a git version that ignores the format string), the split must
-        degrade to None/None rather than raising or silently truncating.
-
-        Monkeypatches MLPERF_ROOT to an isolated tmp_path (matching every
-        other test in this file) rather than relying on the real
-        data/raw/mlperf checkout: without it, this test would raise
-        ValueError instead of exercising the code under test on any machine
-        where that directory happens to be a symlink.
-        """
+        """If `_run_git` output lacks the \\x1f separator, the split must degrade to None/None rather than raising; uses an isolated tmp_path MLPERF_ROOT so the test doesn't raise ValueError on machines where the real data/raw/mlperf checkout is a symlink."""
         monkeypatch.setattr(manifest, "MLPERF_ROOT", tmp_path / "mlperf")
 
         def fake_run_git(repo_dir, *args):
@@ -204,8 +173,7 @@ class TestComputeManifest:
         assert m["sources"]["mlperf_v6_0"]["commit"] is None
 
     def test_refuses_symlinked_mlperf_round_dir(self, tmp_path, monkeypatch):
-        """A symlinked round directory would let `git -C <dir>` silently
-        report an arbitrary repo's commit/remote as the pinned MLPerf mirror."""
+        """A symlinked round directory would let `git -C <dir>` silently report an arbitrary repo's commit/remote as the pinned MLPerf mirror."""
         real_repo = tmp_path / "real_repo"
         _init_git_repo(real_repo, _TEST_REMOTE_URL)
         mlperf_root = tmp_path / "mlperf"
@@ -230,10 +198,7 @@ class TestWriteAndLoadManifest:
         assert manifest.load_manifest(tmp_path / "no_such.lock") is None
 
     def test_refuses_symlinked_lock_file(self, fixture_env, tmp_path):
-        """The lock file is the trust anchor verify_manifest() checks
-        everything against — silently following a symlink here would let an
-        attacker point it at fabricated hashes that always match, defeating
-        the drift check entirely."""
+        """The lock file is verify_manifest()'s trust anchor — following a symlink here would let an attacker point it at fabricated hashes that always match, defeating drift checks entirely."""
         manifest.write_manifest(fixture_env["lock_path"])
         evil_lock = tmp_path / "evil.lock"
         evil_lock.write_text("sources: {mi300x_calibration: {sha256: attacker_controlled}}")
@@ -253,10 +218,7 @@ class TestWriteAndLoadManifest:
 
 
 class TestSourcesPresent:
-    """sources_present() — disambiguates verify_manifest()'s "clean" result
-    (every locked source present and matching) from "vacuously clean"
-    (most/all locked sources simply absent, so nothing was actually
-    compared) — a distinction lost once flattened into a single boolean."""
+    """sources_present() disambiguates verify_manifest()'s "clean" (every source present and matching) from "vacuously clean" (sources absent, nothing compared) — a distinction a single boolean would lose."""
 
     def test_all_present(self, fixture_env):
         manifest.write_manifest(fixture_env["lock_path"])
@@ -274,9 +236,7 @@ class TestSourcesPresent:
         assert manifest.sources_present(tmp_path / "no_such.lock") == (0, 0)
 
     def test_symlinked_source_path_not_counted_present(self, fixture_env, tmp_path):
-        """A symlinked source path must not count as genuinely present —
-        matches _refuse_symlink_and_oversize's "don't trust a symlink"
-        convention used everywhere else in this module."""
+        """A symlinked source path must not count as genuinely present, matching _refuse_symlink_and_oversize's "don't trust a symlink" convention used elsewhere in this module."""
         manifest.write_manifest(fixture_env["lock_path"])
         real = tmp_path / "real_target"
         real.mkdir()
@@ -288,10 +248,7 @@ class TestSourcesPresent:
         assert (present, total) == (1, 2)
 
     def test_git_source_path_that_is_a_file_not_counted_present(self, fixture_env):
-        """A `type: git` source's path must be a *directory* to count as
-        present, matching compute_manifest()'s own `repo_dir.is_dir()`
-        semantics — a bare `.exists()` check would (wrongly) count a
-        same-path regular file as a present MLPerf mirror."""
+        """A `type: git` source's path must be a directory to count as present (matching compute_manifest()'s `repo_dir.is_dir()`) — a bare `.exists()` check would wrongly count a same-path file as present."""
         manifest.write_manifest(fixture_env["lock_path"])
         import shutil
         shutil.rmtree(fixture_env["round_dir"])
@@ -300,9 +257,7 @@ class TestSourcesPresent:
         assert (present, total) == (1, 2)
 
     def test_file_source_path_that_is_a_directory_not_counted_present(self, fixture_env):
-        """A `type: file` source's path (the calibration CSV) must be a
-        regular *file* to count as present, matching compute_manifest()'s
-        own `CALIBRATION_CSV.is_file()` semantics."""
+        """A `type: file` source's path must be a regular file to count as present, matching compute_manifest()'s own `CALIBRATION_CSV.is_file()` semantics."""
         manifest.write_manifest(fixture_env["lock_path"])
         fixture_env["calibration_csv"].unlink()
         fixture_env["calibration_csv"].mkdir()
@@ -310,10 +265,7 @@ class TestSourcesPresent:
         assert (present, total) == (1, 2)
 
     def test_accepts_preloaded_locked_dict_without_reloading(self, fixture_env, monkeypatch):
-        """train_final.py loads data_manifest.lock once and passes it to both
-        verify_manifest() and sources_present() rather than each independently
-        re-reading and re-parsing the same file — confirms passing `locked`
-        both produces the identical result and genuinely skips load_manifest()."""
+        """train_final.py loads data_manifest.lock once and passes it to both verify_manifest() and sources_present() — confirms passing `locked` produces an identical result and genuinely skips load_manifest()."""
         manifest.write_manifest(fixture_env["lock_path"])
         preloaded = manifest.load_manifest(fixture_env["lock_path"])
 
@@ -331,8 +283,7 @@ class TestVerifyManifest:
         assert manifest.verify_manifest(fixture_env["lock_path"]) == []
 
     def test_accepts_preloaded_locked_dict_without_reloading(self, fixture_env, monkeypatch):
-        """Same contract as sources_present()'s equivalent test — train_final.py
-        loads data_manifest.lock once and passes it to both functions."""
+        """Same contract as sources_present()'s equivalent test — train_final.py loads data_manifest.lock once and passes it to both functions."""
         manifest.write_manifest(fixture_env["lock_path"])
         preloaded = manifest.load_manifest(fixture_env["lock_path"])
 
@@ -369,9 +320,7 @@ class TestVerifyManifest:
         assert "mi300x_calibration" in mismatches[0]
 
     def test_absent_source_is_not_a_mismatch(self, fixture_env):
-        """A source that was locked but hasn't been re-fetched locally (e.g. a
-        fresh clone before running fetch_mlperf.sh) must not be reported as
-        drift — it's an unfetched prerequisite, not a silent corpus change."""
+        """A locked source not yet re-fetched locally (e.g. a fresh clone before fetch_mlperf.sh) must not be reported as drift — it's an unfetched prerequisite, not a silent corpus change."""
         manifest.write_manifest(fixture_env["lock_path"])
 
         import shutil
@@ -386,17 +335,13 @@ class TestVerifyManifest:
         assert any("No data manifest found" in rec.message for rec in caplog.records)
 
     def test_never_raises_even_on_mismatch(self, fixture_env):
-        """Warn-only by design (deliberately not hard-refuse,
-        see module docstring) — verify_manifest must never raise."""
+        """Warn-only by design (deliberately not hard-refuse) — verify_manifest must never raise."""
         manifest.write_manifest(fixture_env["lock_path"])
         fixture_env["calibration_csv"].write_text("completely different content")
         manifest.verify_manifest(fixture_env["lock_path"])  # must not raise
 
     def test_still_raises_on_symlinked_lock_file(self, fixture_env, tmp_path):
-        """Warn-only applies to hash *mismatches*, not to active tampering.
-        A symlinked lock file is a different, more severe failure mode
-        (see load_manifest's docstring) and must still raise — verify_manifest
-        deliberately does not catch/silence it."""
+        """Warn-only applies to hash mismatches, not active tampering — a symlinked lock file is a more severe failure mode and verify_manifest deliberately still raises for it."""
         manifest.write_manifest(fixture_env["lock_path"])
         evil_lock = tmp_path / "evil.lock"
         evil_lock.write_text("sources: {mi300x_calibration: {sha256: attacker_controlled}}")

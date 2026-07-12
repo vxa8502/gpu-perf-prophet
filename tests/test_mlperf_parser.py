@@ -1,10 +1,4 @@
-"""
-Unit tests for src/data/mlperf_parser.py.
-
-All tests use synthetic, in-memory fixture data — no real MLPerf repos required.
-Fixtures mirror the exact directory layout and file content format of
-MLPerf Inference v4.1–v6.0 closed-division submissions.
-"""
+"""Unit tests for src/data/mlperf_parser.py; fixtures use synthetic, in-memory data mirroring the exact directory layout and file format of MLPerf Inference v4.1-v6.0 closed-division submissions — no real MLPerf repos required."""
 
 import json
 import logging
@@ -33,15 +27,11 @@ from src.data.mlperf_parser import (
 )
 
 
-# ---------------------------------------------------------------------------
 # Fixture content (mirrors real MLPerf file content)
-# ---------------------------------------------------------------------------
 
 SYSTEM_JSON_NVIDIA = {
     "system_name": "H100-SXM5-80GBx8_TRT-LLM",
-    # Real MLPerf H100 SXM submissions use "H100-SXM-80GB" (no "5").
-    # This must match the aliases in data/gpu_specs.yaml for end-to-end
-    # parse_repo → enrich_df tests to produce a non-null canonical_gpu_id.
+    # Must match an alias in data/gpu_specs.yaml so end-to-end parse_repo -> enrich_df tests produce a non-null canonical_gpu_id.
     "accelerator_model_name": "NVIDIA H100-SXM-80GB",
     "accelerators_per_node": "8",
     "accelerator_memory_capacity": "80 GB",
@@ -134,9 +124,7 @@ Result is : INVALID
 """
 
 
-# ---------------------------------------------------------------------------
 # Fixtures: build a minimal synthetic repo tree on disk
-# ---------------------------------------------------------------------------
 
 def _build_repo(
     tmp_path: Path,
@@ -144,11 +132,7 @@ def _build_repo(
     benchmarks: list[str] | None = None,
     scenarios: list[str] | None = None,
 ) -> Path:
-    """
-    Create a minimal MLPerf-layout repo under tmp_path.
-
-    Returns the repo root path.
-    """
+    """Create a minimal MLPerf-layout repo under tmp_path; returns the repo root path."""
     if benchmarks is None:
         benchmarks = ["llama2-70b"]
     if scenarios is None:
@@ -179,9 +163,7 @@ def _build_repo(
     return repo
 
 
-# ---------------------------------------------------------------------------
 # Unit tests: helper functions
-# ---------------------------------------------------------------------------
 
 class TestParseVramGb:
     def test_gb_suffix(self):
@@ -203,8 +185,7 @@ class TestParseVramGb:
         assert _parse_vram_gb("lots") is None
 
     def test_dot_only_match_returns_none(self):
-        # Regression: [\d.]+ matched ". GB" → float(".") raised ValueError and
-        # crashed the entire parse job.  Fixed by requiring match to start with \d.
+        # Regression: [\d.]+ matched ". GB" -> float(".") raised ValueError and crashed the whole parse job; fixed by requiring the match to start with \d.
         assert _parse_vram_gb(". GB") is None
 
     def test_malformed_float_returns_none(self):
@@ -237,9 +218,7 @@ class TestAccuracyTier:
         assert _accuracy_tier(name) == expected
 
 
-# ---------------------------------------------------------------------------
 # Unit tests: _parse_system_json
-# ---------------------------------------------------------------------------
 
 class TestParseSystemJson:
     def test_nvidia_fields(self, tmp_path):
@@ -272,8 +251,7 @@ class TestParseSystemJson:
         assert hw == {}
 
     def test_json_array_returns_empty(self, tmp_path):
-        # Bug fix: json.loads('[1,2,3]') returns a list; raw.get(...) on a list
-        # raised AttributeError (uncaught), aborting the entire round parse.
+        # Bug fix: json.loads('[1,2,3]') returns a list; raw.get(...) on a list raised an uncaught AttributeError, aborting the entire round parse.
         p = tmp_path / "array.json"
         p.write_text("[1, 2, 3]", encoding="utf-8")
         hw = _parse_system_json(p)
@@ -286,9 +264,7 @@ class TestParseSystemJson:
         assert hw == {}
 
 
-# ---------------------------------------------------------------------------
 # Unit tests: _parse_log_summary
-# ---------------------------------------------------------------------------
 
 class TestParseLogSummary:
     def test_offline_throughput(self, tmp_path):
@@ -352,14 +328,11 @@ class TestParseLogSummary:
         assert m["tpot_mean_ms"] is None
 
 
-# ---------------------------------------------------------------------------
 # Integration tests: parse_repo
-# ---------------------------------------------------------------------------
 
 class TestParseRepo:
     def test_correct_row_count(self, tmp_path):
-        # 2 scenarios × 1 benchmark = 2 rows — verify both scenarios are present,
-        # not just that the total count is right (two Offline rows would also give len==2)
+        # 2 scenarios x 1 benchmark = 2 rows — verifies both scenarios are present, not just the total count (two Offline rows would also give len==2).
         repo = _build_repo(
             tmp_path, SYSTEM_JSON_NVIDIA,
             benchmarks=["llama2-70b"],
@@ -498,12 +471,7 @@ class TestParseRepo:
         assert df.iloc[0]["benchmark_accuracy_tier"] == "99"
 
     def test_num_gpus_zero_clamped_to_one(self, tmp_path):
-        """accelerators_per_node=0 must produce num_gpus=1, not 0.
-
-        CPU-only inference systems (e.g. Intel EMR) submit with 0 accelerators.
-        Storing 0 would make the stored column inconsistent with the divisor
-        used to compute throughput_tok_per_sec_per_gpu.
-        """
+        """accelerators_per_node=0 (CPU-only systems, e.g. Intel EMR) must produce num_gpus=1, not 0 — storing 0 would make the column inconsistent with the throughput_tok_per_sec_per_gpu divisor."""
         zero_gpu_json = {**SYSTEM_JSON_NVIDIA, "accelerators_per_node": "0"}
         repo = _build_repo(
             tmp_path, zero_gpu_json,
@@ -516,9 +484,7 @@ class TestParseRepo:
         assert df.iloc[0]["throughput_tok_per_sec_per_gpu"] > 0
 
 
-# ---------------------------------------------------------------------------
 # Security tests: _safe_read_text, symlink guards, _run_number
-# ---------------------------------------------------------------------------
 
 class TestSafeReadText:
     def test_normal_file_read(self, tmp_path):
@@ -576,11 +542,7 @@ class TestRunNumber:
 
 class TestSymlinkGuards:
     def test_symlinked_submitter_dir_skipped(self, tmp_path):
-        """A symlinked submitter directory must not be walked.
-
-        The target is a valid submission tree — without the guard, the parser
-        would follow the symlink and return rows.  With it, df must be empty.
-        """
+        """A symlinked submitter directory must not be walked — without the guard the parser would follow it into a valid submission tree and return rows; with it, df must be empty."""
         repo = tmp_path / "repo"
         real_sub = tmp_path / "real_submitter"
         # Build a complete, parseable submission inside real_sub.
@@ -622,8 +584,7 @@ class TestSymlinkGuards:
         sys_dir = repo / "closed" / "Sub" / "systems"
         sys_dir.mkdir(parents=True)
         (sys_dir / f"{system_name}.json").symlink_to(real_json)
-        # Parser should produce a row (from the log) but with no hw fields —
-        # the **hw spread adds no keys when hw == {}, so gpu_name is absent.
+        # Parser should still produce a row from the log, but with no hw fields — the **hw spread adds no keys when hw == {}, so gpu_name is absent.
         df = parse_repo(repo, "v6.0")
         assert len(df) == 1
         assert "gpu_name" not in df.columns
@@ -637,9 +598,7 @@ class TestSymlinkGuards:
         assert _parse_log_summary(link) == {}
 
 
-# ---------------------------------------------------------------------------
 # Unit tests: _extract_precision
-# ---------------------------------------------------------------------------
 
 class TestExtractPrecision:
     @pytest.mark.parametrize("system_name,framework,expected", [
@@ -662,9 +621,7 @@ class TestExtractPrecision:
         assert _extract_precision(system_name, framework) == expected
 
 
-# ---------------------------------------------------------------------------
 # Additional parse_repo behavior tests (post-fix)
-# ---------------------------------------------------------------------------
 
 class TestParseRepoPostFix:
     def test_server_tput_uses_scheduled_not_completed(self, tmp_path):
@@ -703,12 +660,7 @@ Mean latency (ns)               : 4000000000
         assert df.iloc[0]["throughput_samples_per_sec"] == pytest.approx(12.56)
 
     def test_per_gpu_throughput_normalized(self, tmp_path):
-        """Both throughput columns are independently pinned to fixture constants.
-
-        Using row["throughput_tokens_per_sec"] / 8 as expected would only test
-        col_a / 8 ≈ col_b — it passes even if both columns are miscalculated by
-        the same factor.  Pin to the known fixture value instead.
-        """
+        """Both throughput columns are independently pinned to fixture constants — deriving expected from row["throughput_tokens_per_sec"] / 8 would only test col_a/8 ≈ col_b, passing even if both columns were miscalculated by the same factor."""
         repo = _build_repo(
             tmp_path, SYSTEM_JSON_NVIDIA,   # 8 GPUs
             benchmarks=["llama2-70b"],
@@ -729,8 +681,7 @@ Mean latency (ns)               : 4000000000
 
     def test_benchmark_column_is_lowercase(self, tmp_path):
         """benchmark must be lowercased even when the directory name is uppercase."""
-        # _build_repo default ("llama2-70b") is already lowercase — that fixture
-        # never exercises the .lower() call.  Use an uppercase directory name here.
+        # _build_repo's default ("llama2-70b") is already lowercase and never exercises .lower(), so use an uppercase directory name here.
         repo = _build_repo(
             tmp_path, SYSTEM_JSON_NVIDIA,
             benchmarks=["LLAMA2-70B"],
@@ -740,9 +691,7 @@ Mean latency (ns)               : 4000000000
         assert df.iloc[0]["benchmark"] == "llama2-70b"
 
 
-# ---------------------------------------------------------------------------
 # Coverage gap A: open division
-# ---------------------------------------------------------------------------
 
 class TestOpenDivision:
     def test_open_division_rows_included(self, tmp_path):
@@ -793,9 +742,7 @@ class TestOpenDivision:
         assert set(df["division"]) == {"closed", "open"}
 
 
-# ---------------------------------------------------------------------------
 # Coverage gap B: parse_repos (multi-round entry point)
-# ---------------------------------------------------------------------------
 
 class TestParseRepos:
     def test_combines_two_rounds(self, tmp_path):
@@ -827,8 +774,7 @@ class TestParseRepos:
         assert df.empty
 
     def test_deduplication_not_silently_applied(self, tmp_path):
-        """parse_repos must NOT silently drop duplicate (GPU, benchmark) pairs
-        that appear in multiple rounds — those are intentional cross-round rows."""
+        """parse_repos must NOT silently drop duplicate (GPU, benchmark) pairs that appear in multiple rounds — those are intentional cross-round rows."""
         repo_a = _build_repo(
             tmp_path / "a", SYSTEM_JSON_NVIDIA,
             benchmarks=["llama2-70b"], scenarios=["Offline"],
@@ -843,9 +789,7 @@ class TestParseRepos:
         assert set(df["round"]) == {"v5.1", "v6.0"}
 
 
-# ---------------------------------------------------------------------------
 # Reference table sanity checks
-# ---------------------------------------------------------------------------
 
 class TestReferenceTables:
     def test_all_llm_benchmarks_have_token_count(self):
@@ -864,9 +808,7 @@ class TestReferenceTables:
                 )
 
 
-# ---------------------------------------------------------------------------
 # Coverage gap C: _find_best_run early-return paths
-# ---------------------------------------------------------------------------
 
 class TestFindBestRun:
     def test_no_performance_dir_returns_none(self, tmp_path):
@@ -882,19 +824,13 @@ class TestFindBestRun:
         assert _find_best_run(scenario_dir) is None
 
 
-# ---------------------------------------------------------------------------
 # Coverage gap D: parse_repo continue-guards and debug-log branches
-# ---------------------------------------------------------------------------
 
 class TestParseRepoEdgeCases:
     """Targets the five directory-guard continue statements and two debug branches."""
 
     def test_no_system_json_row_still_produced(self, tmp_path):
-        """Missing systems/ dir → OSError branch fires (lines 369-371) → hw = {}.
-
-        The row is still produced but no hardware columns are present because
-        hw == {} contributes nothing to the row dict spread.
-        """
+        """Missing systems/ dir triggers the OSError branch (hw = {}) — the row is still produced, but hw == {} contributes no hardware columns to the row dict spread."""
         system_name = SYSTEM_JSON_NVIDIA["system_name"]
         repo = tmp_path / "repo"
         run_dir = (
@@ -930,12 +866,7 @@ class TestParseRepoEdgeCases:
         assert parse_repo(repo, "v6.0").empty
 
     def test_benchmark_dir_is_file_skipped(self, tmp_path):
-        """A file inside a system dir triggers the benchmark is_dir() guard (line 390).
-
-        The guard must be selective: the file is skipped while a valid benchmark
-        directory next to it is still processed.  assert df.empty would not catch
-        an over-aggressive guard that skipped the entire system.
-        """
+        """A file inside a system dir triggers the benchmark is_dir() guard: it must be selective, skipping the file while still processing a valid sibling benchmark dir — assert df.empty alone wouldn't catch an over-aggressive guard skipping the whole system."""
         system_name = SYSTEM_JSON_NVIDIA["system_name"]
         repo = tmp_path / "repo"
         system_dir = repo / "closed" / "Sub" / "results" / system_name
@@ -1018,16 +949,10 @@ class TestParseRepoEdgeCases:
         assert any("mismatch" in r.getMessage().lower() for r in caplog.records)
 
 
-# ---------------------------------------------------------------------------
 # Coverage gap E: CLI entry point — main() and _build_arg_parser()
-# ---------------------------------------------------------------------------
 
 class TestMainCLI:
-    """Integration tests for main() via monkeypatched sys.argv.
-
-    _build_repo(parent, ...) creates a repo at parent/inference_results_v6.0/,
-    so --repos-dir parent --rounds inference_results_v6.0 is the correct shape.
-    """
+    """Integration tests for main() via monkeypatched sys.argv; _build_repo(parent, ...) creates a repo at parent/inference_results_v6.0/, so --repos-dir parent --rounds inference_results_v6.0 is the correct shape."""
 
     def test_no_round_dirs_exits_1(self, tmp_path, monkeypatch):
         """--repos-dir with no matching subdirectories → SystemExit(1)."""

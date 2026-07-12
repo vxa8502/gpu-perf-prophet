@@ -1,17 +1,4 @@
-"""
-GPU specification database loader for GPU Perf Prophet.
-
-Loads data/gpu_specs.yaml and provides two public entry-points:
-
-    normalize_gpu_name(raw_name, specs) → Optional[str]
-        Maps a raw MLPerf accelerator_model_name to a canonical GPU id.
-        Returns None for heterogeneous multi-GPU strings, unknown GPUs, or
-        explicitly unrecognised names.
-
-    enrich_df(df, spec_path) → pd.DataFrame
-        Adds GPU hardware spec columns to a parsed MLPerf DataFrame.
-        Rows whose gpu_name cannot be normalized get NaN in spec columns.
-"""
+"""GPU spec database loader: normalize_gpu_name() maps raw MLPerf names to canonical ids; enrich_df() joins spec columns onto a parsed MLPerf DataFrame."""
 
 from __future__ import annotations
 
@@ -26,8 +13,7 @@ from typing import Optional
 import pandas as pd
 import yaml
 
-# Real GPU spec files are ~10 KB.  1 MB cap blocks both accidental and
-# adversarial oversized files; mirrors _safe_read_text in mlperf_parser.py.
+# Real spec files are ~10 KB; 1 MB cap blocks oversized files (mirrors mlperf_parser.py's _safe_read_text).
 _MAX_SPEC_BYTES: int = 1 * 1024 * 1024  # 1 MB
 
 log = logging.getLogger(__name__)
@@ -64,35 +50,17 @@ _POWER_SUFFIX_RE = re.compile(r"\s*\(Power Cap[^)]*\)\s*$", re.IGNORECASE)
 
 @functools.lru_cache(maxsize=4)
 def _build_spec_cache(spec_path_str: str) -> tuple[list, dict, dict]:
-    """
-    Load the spec file and build the two derived lookup structures.
-    Cached by path string so repeated enrich_df calls pay the I/O and
-    parse cost only once per unique path.
-
-    Returns (specs, alias_index, id_map).
-
-    The cache key is the literal path string (not resolved), so the
-    symlink guard in load_specs still fires on first access.
-    Cached objects must not be mutated by callers.
-    """
+    """Build (specs, alias_index, id_map) once per unique path string; cached objects must not be mutated by callers."""
     specs  = load_specs(Path(spec_path_str))
     index  = _build_alias_index(specs)
-    # Wrap id_map values in MappingProxyType so callers cannot mutate the
-    # cached spec rows.  The proxy supports all read operations (get, iter,
-    # subscript) that downstream code uses.
+    # MappingProxyType wraps id_map values so callers can't mutate the cached spec rows.
     id_map = {s["id"]: types.MappingProxyType(_spec_row(s)) for s in specs}
     return specs, index, id_map
 
 
 @functools.lru_cache(maxsize=8)
 def load_specs(spec_path: Path | str = _DEFAULT_SPEC_PATH) -> list[dict]:
-    """
-    Load and return the list of GPU spec dicts from the YAML file.
-
-    Raises ValueError for symlinks (path traversal guard) or oversized files.
-    Raises FileNotFoundError / OSError for I/O problems.
-    Raises ValueError for malformed YAML that is missing the 'gpus' key.
-    """
+    """Load the GPU spec dict list from YAML; raises ValueError for symlinks, oversized files, or a missing 'gpus' key."""
     path = Path(spec_path)
     try:
         st = path.lstat()
@@ -121,9 +89,7 @@ def _build_alias_index(specs: list[dict]) -> dict[str, dict]:
         for alias in spec.get("aliases", []):
             key = alias.lower()
             if key in index and index[key]["id"] != spec["id"]:
-                # Warn only when the same alias maps to two *different* GPU ids.
-                # Duplicate aliases within the same GPU (e.g. "HBM3E" vs "HBM3e")
-                # are harmless after case-folding and should not produce noise.
+                # Only warn when the alias maps to two *different* GPU ids (same-GPU dupes are harmless).
                 log.warning(
                     "Conflicting alias %r maps to both %r and %r in GPU spec DB",
                     alias, index[key]["id"], spec["id"],
@@ -156,14 +122,7 @@ def normalize_gpu_name(
     *,
     _index: dict[str, dict] | None = None,
 ) -> Optional[str]:
-    """
-    Map a raw MLPerf accelerator_model_name to a canonical GPU id.
-
-    Returns None for:
-      - null / "N/A" names
-      - heterogeneous multi-GPU strings (e.g. "MI300X ... and MI325X ...")
-      - names that don't match any alias in the spec DB (logged at DEBUG)
-    """
+    """Map a raw MLPerf accelerator_model_name to a canonical GPU id, or None for null/N/A, heterogeneous multi-GPU, or unmatched names."""
     if not raw_name or raw_name.strip().upper() in {"N/A", "NA", "NONE", ""}:
         return None
 
@@ -199,8 +158,7 @@ def _spec_row(spec: dict) -> dict:
         "gpu_peak_fp6_tflops":     pt.get("fp6"),
         "gpu_peak_fp4_tflops":     pt.get("fp4"),
         "gpu_peak_int8_tops": pt.get("int8"),
-        # AMD uses compute_units; NVIDIA uses streaming_multiprocessors.
-        # Stored under a unified key so feature engineering is vendor-agnostic.
+        # Unified key for AMD compute_units / NVIDIA streaming_multiprocessors, so features stay vendor-agnostic.
         "gpu_cu_sm_count": (
             spec.get("compute_units") or spec.get("streaming_multiprocessors")
         ),
@@ -215,19 +173,10 @@ def enrich_df(
     df: pd.DataFrame,
     spec_path: Path | str = _DEFAULT_SPEC_PATH,
 ) -> pd.DataFrame:
-    """
-    Add GPU hardware spec columns to a parsed MLPerf DataFrame.
-
-    Joins on the canonical_gpu_id derived from each row's gpu_name.
-    Rows whose gpu_name cannot be normalized receive NaN in all spec columns.
-    The original DataFrame is not modified; a new DataFrame is returned.
-    """
-    # Fix 1: derive lookup structures once per unique path (cached).
+    """Join GPU hardware spec columns onto a parsed MLPerf DataFrame by canonical_gpu_id; unmatched rows get NaN. Returns a new DataFrame."""
     specs, index, id_map = _build_spec_cache(str(Path(spec_path)))
 
-    # Fix 2: normalize once per unique gpu_name, then broadcast to all rows.
-    # The corpus has ~33 unique names across ~1223 rows; calling
-    # normalize_gpu_name per-row wastes ~1190 redundant lookups.
+    # Normalize once per unique gpu_name (not per row) — ~33 unique names across ~1223 rows.
     unique_names = {n for n in df["gpu_name"].dropna().unique()}
     name_to_id = {
         name: normalize_gpu_name(name, specs, _index=index)
@@ -253,18 +202,13 @@ def enrich_df(
     )
     if unmatched:
         unseen = set(df.loc[canonical_ids.isna(), "gpu_name"].dropna().unique())
-        # Use %r so control characters (newlines, ANSI escapes) in GPU names
-        # are escaped rather than injected into the log stream.
+        # %r escapes control chars in GPU names, guarding against log injection.
         for name in sorted(unseen):
             log.debug("Unmatched gpu_name: %r", name)
 
     result = pd.concat([df, spec_df[SPEC_COLUMNS]], axis=1)
 
-    # Warn when the parser's reported vram_gb (from system JSON
-    # accelerator_memory_capacity) differs from the spec DB's gpu_vram_gb.
-    # This happens when submitters report total system VRAM rather than
-    # per-GPU capacity.  Use gpu_vram_gb for the memory-fit constraint;
-    # treat vram_gb as unreliable for multi-GPU submissions.
+    # Some submitters report total system VRAM (parser's vram_gb) instead of per-GPU capacity (spec DB's gpu_vram_gb); use gpu_vram_gb for the memory-fit constraint.
     if "vram_gb" in result.columns and "gpu_vram_gb" in result.columns:
         conflict = (
             result["vram_gb"].notna()
@@ -283,8 +227,7 @@ def enrich_df(
                 "Use gpu_vram_gb for the memory-fit constraint.",
                 n,
             )
-            # Fix 3: itertuples ~10x faster than iterrows; sufficient for
-            # attribute access.  %r quotes gpu_name to prevent log injection.
+            # itertuples ~10x faster than iterrows; %r quotes gpu_name to prevent log injection.
             for row in examples.itertuples(index=False):
                 log.warning(
                     "  vram conflict: gpu=%r  num_gpus=%s  reported=%s  spec=%s",

@@ -10,17 +10,11 @@ from pydantic import BaseModel, Field, field_validator
 Scenario      = Literal["Offline", "Server"]
 AccuracyTier  = Literal["base", "99", "99.9"]
 Framework     = Literal["vllm", "tensorrt", "rocm_other", "other"]
-# Unlike Scenario/AccuracyTier/Framework, this has no request-side counterpart
-# to validate against — it's entirely server-computed (build_features.memory_fit_verdict)
-# — so it's typed as a Literal here rather than the plain `str` used elsewhere
-# for fields that just echo back already-validated request input.
+# Unlike Scenario/AccuracyTier/Framework, this is entirely server-computed (build_features.memory_fit_verdict), not request-validated, hence Literal not str.
 MemoryFitVerdict = Literal["fits", "tight", "does_not_fit"]
-# Same shape as MemoryFitVerdict above: server-computed from the trained
-# model's per-GPU row counts (GpuPredictor.training_data_tier), not echoed
-# request input.
+# Same shape as MemoryFitVerdict: server-computed from GpuPredictor.training_data_tier, not request input.
 TrainingDataTier = Literal["none", "below_floor", "sufficient"]
-# The four named ranking scalars — request-side counterpart validated
-# against recommender.VALID_RANKING_OBJECTIVES.
+# The four named ranking scalars; validated against recommender.VALID_RANKING_OBJECTIVES.
 RankingObjective = Literal[
     "tokens_per_dollar", "tokens_per_second", "tokens_per_watt", "lowest_cost_per_million_tokens"
 ]
@@ -32,9 +26,7 @@ class PredictRequest(BaseModel):
     scenario:      Scenario     = "Offline"
     accuracy_tier: AccuracyTier = "99"
     framework:     Framework    = "vllm"
-    # KV-cache memory-fit inputs only — not ML features. MLPerf
-    # rows carry no per-row batch/context length, so these are stated,
-    # overridable assumptions; defaults mirror build_features.DEFAULT_*.
+    # KV-cache memory-fit inputs only, not ML features — MLPerf carries no per-row batch/context length, so these are overridable assumptions mirroring build_features.DEFAULT_*.
     batch_size:    int = Field(32,   ge=1,  le=256)
     input_tokens:  int = Field(2048, ge=64, le=8192)
     output_tokens: int = Field(256,  ge=1,  le=4096)

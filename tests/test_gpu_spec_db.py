@@ -1,10 +1,4 @@
-"""
-Tests for src/data/gpu_spec_db.py.
-
-All tests that require the real data/gpu_specs.yaml use the actual file —
-it is curated reference data, not generated output, so reading it in tests
-is appropriate.  No MLPerf repo data required.
-"""
+"""Tests for src/data/gpu_spec_db.py; tests reading data/gpu_specs.yaml use the real file since it's curated reference data, not generated output."""
 
 import logging
 from pathlib import Path
@@ -24,14 +18,11 @@ from src.data.gpu_spec_db import (
 )
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
 def specs():
-    # Shallow copy so test mutations (e.g. specs.append(...)) do not corrupt
-    # the load_specs() lru_cache, which is shared across the whole test process.
+    # Shallow copy so test mutations (e.g. specs.append(...)) do not corrupt the load_specs() lru_cache, which is shared across the whole test process.
     return list(load_specs())
 
 
@@ -40,9 +31,7 @@ def alias_index(specs):
     return _build_alias_index(specs)
 
 
-# ---------------------------------------------------------------------------
 # YAML integrity
-# ---------------------------------------------------------------------------
 
 class TestYamlIntegrity:
     REQUIRED_FIELDS = [
@@ -50,8 +39,7 @@ class TestYamlIntegrity:
         "vram_gb", "hbm_bandwidth_tbps", "peak_tflops",
         "in_model_scope", "spec_confidence", "aliases",
     ]
-    # Precisions every in-scope GPU supports (A100 Ampere has no FP8 natively,
-    # so fp8 is intentionally absent here; covered by a separate test below).
+    # Precisions every in-scope GPU supports (A100 Ampere lacks native FP8, intentionally excluded; covered by a separate test below).
     REQUIRED_TFLOPS = ["fp32", "bf16", "fp16"]
 
     def test_all_ids_unique(self, specs):
@@ -66,9 +54,7 @@ class TestYamlIntegrity:
                 )
 
     def test_all_gpus_have_valid_spec_confidence(self, specs):
-        # Previously named "test_in_scope_gpus_have_verified_or_estimated_confidence"
-        # but the loop had no in_model_scope guard — it checked all GPUs.
-        # The name now matches the actual behavior.
+        # Renamed from "..._in_scope_gpus_..." — the loop had no in_model_scope guard, so it actually checked all GPUs; name now matches behavior.
         valid = {"verified", "estimated"}
         for spec in specs:
             assert spec["spec_confidence"] in valid, (
@@ -77,12 +63,7 @@ class TestYamlIntegrity:
             )
 
     def test_in_scope_gpus_have_bandwidth_and_bf16(self, specs):
-        """In-scope GPUs must have positive bandwidth and BF16 TFLOPS.
-
-        Zero or None would silently corrupt the roofline model:
-        zero bandwidth → division-by-zero in arithmetic intensity calculation;
-        zero BF16 TFLOPS → roofline ceiling of 0, predicting 0 throughput always.
-        """
+        """In-scope GPUs must have positive bandwidth and BF16 TFLOPS — zero/None would silently corrupt the roofline model (div-by-zero or a 0-throughput ceiling)."""
         for spec in specs:
             if not spec["in_model_scope"]:
                 continue
@@ -96,11 +77,7 @@ class TestYamlIntegrity:
             )
 
     def test_in_scope_gpus_have_positive_required_tflops(self, specs):
-        """REQUIRED_TFLOPS must be positive for every in-scope GPU.
-
-        Catches accidentally-zero values that would silently make the roofline
-        predict 0 throughput for those precisions.
-        """
+        """REQUIRED_TFLOPS must be positive for every in-scope GPU — catches accidentally-zero values that would silently make the roofline predict 0 throughput."""
         for spec in specs:
             if not spec["in_model_scope"]:
                 continue
@@ -113,11 +90,7 @@ class TestYamlIntegrity:
                 )
 
     def test_non_null_tflops_are_positive(self, specs):
-        """Any non-null peak_tflops value (including fp8, fp6, fp4) must be > 0.
-
-        Null means unsupported (e.g. A100 fp8 is null — correct).
-        A non-null zero would silently corrupt roofline calculations.
-        """
+        """Any non-null peak_tflops value (including fp8, fp6, fp4) must be > 0 — null means unsupported (e.g. A100 fp8), but a non-null zero would silently corrupt roofline calculations."""
         for spec in specs:
             pt = spec.get("peak_tflops") or {}
             for key, val in pt.items():
@@ -161,9 +134,7 @@ class TestYamlIntegrity:
         assert not missing, f"Required GPUs missing from spec DB: {missing}"
 
 
-# ---------------------------------------------------------------------------
 # Security tests: load_specs guards
-# ---------------------------------------------------------------------------
 
 class TestLoadSpecsSecurity:
     def _minimal_yaml(self, tmp_path, content: dict) -> Path:
@@ -219,8 +190,7 @@ class TestLogInjection:
         df = pd.DataFrame([{"gpu_name": injected}])
         with caplog.at_level(logging.DEBUG, logger="src.data.gpu_spec_db"):
             enrich_df(df)
-        # Every record produced must have been created by the logger itself —
-        # the injected newline must appear repr-quoted, not as a raw newline.
+        # The injected newline must appear repr-quoted, not as a raw newline in a forged second log line.
         for record in caplog.records:
             assert "\n[CRITICAL]" not in record.getMessage(), (
                 "Log injection: raw newline from GPU name appeared in log output"
@@ -239,9 +209,7 @@ class TestLogInjection:
             )
 
 
-# ---------------------------------------------------------------------------
 # _strip_suffixes
-# ---------------------------------------------------------------------------
 
 class TestStripSuffixes:
     @pytest.mark.parametrize("raw,expected", [
@@ -255,9 +223,7 @@ class TestStripSuffixes:
         assert _strip_suffixes(raw) == expected
 
 
-# ---------------------------------------------------------------------------
 # _is_heterogeneous
-# ---------------------------------------------------------------------------
 
 class TestIsHeterogeneous:
     def test_mixed_and(self):
@@ -278,9 +244,7 @@ class TestIsHeterogeneous:
         assert not _is_heterogeneous("NVIDIA H100-SXM-80GB, Rev 2")
 
 
-# ---------------------------------------------------------------------------
 # normalize_gpu_name
-# ---------------------------------------------------------------------------
 
 class TestNormalizeGpuName:
     # Known exact aliases from the real MLPerf corpus
@@ -343,9 +307,7 @@ class TestNormalizeGpuName:
         assert normalize_gpu_name("NVIDIA H9000-FAKE", specs, _index=alias_index) is None
 
 
-# ---------------------------------------------------------------------------
 # enrich_df
-# ---------------------------------------------------------------------------
 
 class TestEnrichDf:
     def _minimal_df(self, gpu_name: str) -> pd.DataFrame:
@@ -414,11 +376,7 @@ class TestEnrichDf:
         assert nv["gpu_cu_sm_count"] == 132
 
     def test_duplicate_gpu_name_rows_all_enriched(self):
-        """All rows sharing the same gpu_name must get spec columns populated.
-
-        Correctness check: the deduplication must broadcast results to all rows,
-        not just the first occurrence.
-        """
+        """All rows sharing the same gpu_name must get spec columns populated — the dedup must broadcast results to all rows, not just the first occurrence."""
         df = pd.DataFrame([{"gpu_name": "NVIDIA H200-SXM-141GB"}] * 50)
         enriched = enrich_df(df)
         assert len(enriched) == 50
@@ -426,12 +384,7 @@ class TestEnrichDf:
         assert enriched["gpu_hbm_bandwidth_tbps"].notna().all()
 
     def test_vram_conflict_warning_logged(self, caplog):
-        """enrich_df warns when parser vram_gb differs from spec DB gpu_vram_gb.
-
-        Simulates a multi-GPU system where the submitter reported total VRAM
-        (8 × 80 GB = 640 GB) rather than per-GPU capacity (80 GB).
-        Covers lines 262-282 in gpu_spec_db.py.
-        """
+        """enrich_df warns when parser vram_gb differs from spec DB gpu_vram_gb; simulates a submitter reporting total system VRAM (8x80=640 GB) instead of per-GPU capacity (80 GB)."""
         df = pd.DataFrame([{
             "gpu_name": "NVIDIA H100-SXM-80GB",
             "vram_gb":  640.0,   # 8-GPU total — spec DB stores 80 GB per-GPU
@@ -462,9 +415,7 @@ class TestEnrichDf:
         )
 
 
-# ---------------------------------------------------------------------------
 # _build_alias_index: conflicting alias warning
-# ---------------------------------------------------------------------------
 
 class TestBuildAliasIndex:
     def test_conflicting_alias_warns(self, caplog):

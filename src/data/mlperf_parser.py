@@ -1,27 +1,4 @@
-"""
-MLPerf Inference results parser for GPU Perf Prophet.
-
-Walks one or more local MLPerf Inference results repos (v4.1–v6.0) and
-produces a flat CSV/Parquet of (system, workload, scenario) performance rows.
-GPU hardware specs and LLM model specs are joined separately (see gpu_spec_db.py).
-
-Directory contract — consistent across v4.1–v6.0, closed and open divisions:
-
-  <repo_root>/
-    {closed,open}/<submitter>/
-      results/<system_name>/<benchmark>/<scenario>/
-        performance/run_<N>/mlperf_log_summary.txt
-      systems/<system_name>.json
-
-Usage (CLI):
-    python -m src.data.mlperf_parser \\
-        --repos-dir data/raw/mlperf \\
-        --rounds v4.1 v5.0 v5.1 v6.0 \\
-        --output data/processed/mlperf_raw.csv --parquet
-
-    Expects repos at data/raw/mlperf/v4.1/, data/raw/mlperf/v5.0/, etc.
-    See scripts/fetch_mlperf.sh for sparse-checkout instructions.
-"""
+"""MLPerf Inference results parser: walks local MLPerf Inference results repos (v4.1-v6.0, closed/open divisions) and produces a flat CSV/Parquet of (system, workload, scenario) performance rows; GPU/model specs are joined separately (see gpu_spec_db.py). CLI: `python -m src.data.mlperf_parser --repos-dir data/raw/mlperf --rounds v4.1 v5.0 v5.1 v6.0 --output data/processed/mlperf_raw.csv --parquet` (see scripts/fetch_mlperf.sh for fetching)."""
 
 from __future__ import annotations
 
@@ -37,12 +14,9 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Reference tables
-# ---------------------------------------------------------------------------
+# --- Reference tables ---
 
-# All LLM inference benchmark names used across MLPerf v4.1–v6.0 (and anticipated v7.0+).
-# Accuracy-constrained variants (e.g. -99, -99.9) share the same dataset.
+# All LLM benchmark names used across MLPerf v4.1-v6.0 (and anticipated v7.0+); accuracy-constrained variants (-99, -99.9) share the same dataset.
 LLM_BENCHMARKS: frozenset[str] = frozenset({
     "gptj", "gptj-99", "gptj-99.9",
     "llama2-70b", "llama2-70b-99", "llama2-70b-99.9",
@@ -51,15 +25,7 @@ LLM_BENCHMARKS: frozenset[str] = frozenset({
     "llama3.1-8b",   "llama3.1-8b-99",   "llama3.1-8b-99.9",
 })
 
-# Approximate mean output tokens per sample — used to convert samples/sec → tok/sec.
-# Sources: MLPerf Inference LLM benchmark dataset documentation.
-#   gptj:         fixed 128-token output per benchmark spec.
-#   llama2-70b:   ~294 mean output tokens from Open ORCA v1 (MLPerf v4.1+).
-#   mixtral-8x7b: ~145 mean output tokens (Open ORCA; verify per round if needed).
-#   llama3.1-405b: same Open ORCA dataset as llama2-70b per MLPerf rules.
-#   llama3.1-8b:   same Open ORCA dataset as llama2-70b per MLPerf rules.
-# IMPORTANT: these are estimates; flag them in the data card and re-verify if the
-# dataset changes between rounds.
+# Mean output tokens/sample (MLPerf dataset docs) to convert samples/sec -> tok/sec: gptj fixed 128, llama2-70b/llama3.1 ~294 (Open ORCA), mixtral ~145 — these are estimates, re-verify if the dataset changes between rounds.
 TOKENS_PER_SAMPLE: dict[str, int] = {
     "gptj":               128,
     "gptj-99":            128,
@@ -88,18 +54,7 @@ def _base_benchmark(benchmark: str) -> str:
 
 
 def _accuracy_tier(benchmark: str) -> str:
-    """
-    Extract the MLPerf accuracy-constraint tier from a benchmark name.
-
-    Returns one of "99.9" | "99" | "base".
-
-    Used as a proxy for precision when direct precision extraction fails
-    (which is almost always — real MLPerf system names are hardware
-    identifiers, not precision-tagged strings).  Correlation:
-      "99.9" → FP16 (high-fidelity submissions; AMD may use FP8 achieving this tier)
-      "99"   → typically FP8 or better
-      "base" → throughput-optimized; any precision acceptable to submitter
-    """
+    """Extract the MLPerf accuracy-constraint tier ("99.9" | "99" | "base") from a benchmark name — used as a proxy for precision since real system names rarely tag it directly."""
     if benchmark.endswith("-99.9"):
         return "99.9"
     if benchmark.endswith("-99"):
@@ -107,27 +62,15 @@ def _accuracy_tier(benchmark: str) -> str:
     return "base"
 
 
-# ---------------------------------------------------------------------------
-# Safe file reading
-# ---------------------------------------------------------------------------
+# --- Safe file reading ---
 
-# Real MLPerf files are < 50 KB. Cap at 512 KB (10× safety margin) to
-# refuse corrupted or adversarial files without loading them into memory.
+# Real MLPerf files are < 50 KB; 512 KB cap (10x margin) refuses corrupted/adversarial files without loading them into memory.
 _MAX_FILE_BYTES: int = 512 * 1024  # 512 KB
 
 
 def _safe_read_text(path: Path) -> Optional[str]:
-    """
-    Read a text file with three safety checks:
-
-    1. Refuse symlinks — git repos can contain symlinks pointing anywhere on disk.
-    2. Enforce a size cap — prevents memory exhaustion from oversized/crafted files.
-    3. Catch only I/O errors — lets MemoryError and other fatal signals propagate.
-
-    Returns None (logged at WARNING) instead of raising on any guarded condition.
-    """
-    # Single lstat() call supplies both the symlink bit and the file size,
-    # avoiding a second stat() syscall compared to is_symlink() + stat().
+    """Read a text file, refusing symlinks and oversized files and catching only I/O errors; returns None (logged at WARNING) instead of raising on any guarded condition."""
+    # Single lstat() call supplies both the symlink bit and the file size, avoiding a second stat() syscall.
     try:
         st = path.lstat()
     except OSError as exc:
@@ -147,9 +90,7 @@ def _safe_read_text(path: Path) -> Optional[str]:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Field-parsing helpers
-# ---------------------------------------------------------------------------
+# --- Field-parsing helpers ---
 
 def _parse_vram_gb(s: object) -> Optional[float]:
     """'192 GB' → 192.0, '80 GiB' → 80.0, None → None."""
@@ -177,17 +118,10 @@ def _ns_to_ms(ns: Optional[int]) -> Optional[float]:
     return ns / 1_000_000 if ns is not None else None
 
 
-# ---------------------------------------------------------------------------
-# system_desc.json parser
-# ---------------------------------------------------------------------------
+# --- system_desc.json parser ---
 
 def _parse_system_json(path: Path) -> dict:
-    """
-    Parse one system description JSON file into a flat dict.
-
-    Field names are consistent across v4.1–v6.0.  Missing fields return None
-    rather than raising, so schema drift between rounds is handled gracefully.
-    """
+    """Parse one system description JSON file into a flat dict; missing fields return None rather than raising, so schema drift between rounds is handled gracefully."""
     text = _safe_read_text(path)
     if text is None:
         return {}
@@ -197,10 +131,7 @@ def _parse_system_json(path: Path) -> dict:
         log.warning("Malformed JSON in %s: %s", path, exc)
         return {}
 
-    # json.loads can return any JSON type (list, string, int, …); the caller
-    # expects a dict and calls raw.get(...), which raises AttributeError on
-    # non-dict types.  Guard here so a corrupted or adversarial system JSON
-    # doesn't abort parsing of the entire round directory.
+    # json.loads can return any JSON type; raw.get(...) would raise AttributeError on non-dict, aborting the whole round directory's parse.
     if not isinstance(raw, dict):
         log.warning(
             "Expected JSON object in %s, got %s — skipping",
@@ -208,11 +139,7 @@ def _parse_system_json(path: Path) -> dict:
         )
         return {}
 
-    # num_gpus = accelerators_per_node × number_of_nodes.
-    # Multi-node MLPerf submissions report throughput for the entire cluster but
-    # only set accelerators_per_node (= per-node count).  Multiplying by
-    # number_of_nodes gives the total GPU count that throughput was measured
-    # against, which is the correct divisor for per-GPU normalisation.
+    # num_gpus = accelerators_per_node x number_of_nodes: multi-node submissions report cluster-wide throughput but only set the per-node count, so this gives the correct divisor for per-GPU normalisation.
     accel_per_node = _parse_int(raw.get("accelerators_per_node")) or 1
     num_nodes      = max(_parse_int(raw.get("number_of_nodes")) or 1, 1)
 
@@ -226,9 +153,7 @@ def _parse_system_json(path: Path) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# mlperf_log_summary.txt parser
-# ---------------------------------------------------------------------------
+# --- mlperf_log_summary.txt parser ---
 
 # Regex patterns — cover formatting variations observed across v4.1–v6.0.
 _RE_SCENARIO     = re.compile(r"Scenario\s*:\s*(\S+)",                              re.I)
@@ -246,11 +171,7 @@ _RE_TPOT_P99     = re.compile(r"99(?:th|\.00) Percentile Time Per Output Token\s
 
 
 def _parse_log_summary(path: Path) -> dict:
-    """
-    Parse one mlperf_log_summary.txt into a flat dict of performance metrics.
-    All latencies are converted from nanoseconds → milliseconds.
-    Returns an empty dict on read/parse failure (logged at WARNING).
-    """
+    """Parse one mlperf_log_summary.txt into a flat dict of performance metrics (latencies converted ns -> ms); returns an empty dict on read/parse failure (logged at WARNING)."""
     text = _safe_read_text(path)
     if text is None:
         return {}
@@ -281,9 +202,7 @@ def _parse_log_summary(path: Path) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Precision extraction
-# ---------------------------------------------------------------------------
+# --- Precision extraction ---
 
 # Ordered from most-specific to least-specific; first match wins.
 _PRECISION_PATTERNS: list[tuple[str, re.Pattern]] = [
@@ -297,16 +216,8 @@ _PRECISION_PATTERNS: list[tuple[str, re.Pattern]] = [
 
 
 def _extract_precision(system_name: str, framework: Optional[str]) -> Optional[str]:
-    """
-    Best-effort precision extraction from system_name and framework fields.
-
-    MLPerf doesn't have a dedicated precision field; submitters encode it in
-    the system name (e.g., 'AMD_MI300X_FP8_vLLM') and/or the framework string
-    (e.g., 'ROCm 6.2.4, vLLM 0.5.0-fp8').  Returns None when not found —
-    callers should treat None as 'unknown' rather than a specific precision.
-    """
-    # Replace underscores with spaces so \b word-boundaries work on tokens like
-    # "AMD_MI300X_FP8_vLLM" → "AMD MI300X FP8 vLLM", making \bFP8\b match.
+    """Best-effort precision extraction from system_name/framework fields (MLPerf has no dedicated precision field); returns None when not found — callers should treat None as 'unknown'."""
+    # Replace underscores with spaces so \b word-boundaries match tokens like "AMD_MI300X_FP8_vLLM" -> "AMD MI300X FP8 vLLM".
     search_text = f"{system_name} {framework or ''}".replace("_", " ")
     for label, pat in _PRECISION_PATTERNS:
         if pat.search(search_text):
@@ -314,9 +225,7 @@ def _extract_precision(system_name: str, framework: Optional[str]) -> Optional[s
     return None
 
 
-# ---------------------------------------------------------------------------
-# Run-directory resolution
-# ---------------------------------------------------------------------------
+# --- Run-directory resolution ---
 
 def _run_number(log_file: Path) -> int:
     """Extract the integer N from a 'run_N' directory name, -1 if not found."""
@@ -325,17 +234,12 @@ def _run_number(log_file: Path) -> int:
 
 
 def _find_best_run(scenario_dir: Path) -> Optional[Path]:
-    """
-    Return the mlperf_log_summary.txt from the highest-numbered run_N directory
-    under <scenario_dir>/performance/.  Returns None if none exists.
-    Symlinked run directories are skipped (see _safe_read_text for rationale).
-    """
+    """Return the mlperf_log_summary.txt from the highest-numbered run_N dir under <scenario_dir>/performance/ (None if none exists); symlinked run dirs are skipped."""
     perf_dir = scenario_dir / "performance"
     if not perf_dir.is_dir() or perf_dir.is_symlink():
         return None
 
-    # Single pass: filter symlinks at both directory and file level, extract
-    # run number, and discard non-numeric names — all in one list comprehension.
+    # Single pass: filter symlinks at both dir/file level, extract run number, discard non-numeric names.
     runs = [
         (p, n)
         for p in perf_dir.glob("run_*/mlperf_log_summary.txt")
@@ -349,9 +253,7 @@ def _find_best_run(scenario_dir: Path) -> Optional[Path]:
     return max(runs, key=lambda x: x[1])[0]
 
 
-# ---------------------------------------------------------------------------
-# Repo walker
-# ---------------------------------------------------------------------------
+# --- Repo walker ---
 
 def parse_repo(
     repo_root: Path,
@@ -359,16 +261,7 @@ def parse_repo(
     divisions: tuple[str, ...] = ("closed", "open"),
     llm_only: bool = True,
 ) -> pd.DataFrame:
-    """
-    Walk one MLPerf Inference results repo and return a DataFrame.
-
-    Parameters
-    ----------
-    repo_root : Local clone of an inference_results_vX.Y repo.
-    round_tag : Version label written into every output row, e.g. "v6.0".
-    divisions : Submission divisions to include ("closed", "open", or both).
-    llm_only  : When True (default), skip non-LLM benchmarks (vision, audio, etc.).
-    """
+    """Walk one MLPerf Inference results repo (local clone of inference_results_vX.Y) and return a DataFrame of rows tagged with round_tag, filtered by divisions and (by default) to LLM-only benchmarks."""
     repo_root = Path(repo_root)
     rows: list[dict] = []
 
@@ -393,8 +286,7 @@ def parse_repo(
                 system_name = system_dir.name
 
                 sys_json_path = systems_dir / f"{system_name}.json"
-                # Single lstat() gives existence + symlink bit — avoids the
-                # exists()+is_symlink()+is_symlink() three-call pattern.
+                # Single lstat() gives existence + symlink bit, avoiding the exists()+is_symlink()+is_symlink() three-call pattern.
                 try:
                     _st = sys_json_path.lstat()
                 except OSError:
@@ -407,21 +299,16 @@ def parse_repo(
                     else:
                         hw = _parse_system_json(sys_json_path)
 
-                # Precision is a system-level attribute — compute it once here
-                # rather than once per (benchmark, scenario) row.
+                # Precision is a system-level attribute — compute it once here rather than once per (benchmark, scenario) row.
                 precision = _extract_precision(system_name, hw.get("framework"))
-                # Clamp to ≥ 1: accelerators_per_node = "0" appears for CPU-only
-                # inference systems (e.g. Intel EMR PyTorch); using 0 as the
-                # divisor would produce ±inf throughput_tok_per_sec_per_gpu.
-                # The stored num_gpus must match the divisor used for computation.
+                # Clamp to >= 1: accelerators_per_node = "0" for CPU-only systems (e.g. Intel EMR); 0 as divisor would produce +-inf throughput_tok_per_sec_per_gpu.
                 num_gpus = max(hw.get("num_gpus") or 1, 1)
 
                 for benchmark_dir in sorted(system_dir.iterdir()):
                     if not benchmark_dir.is_dir() or benchmark_dir.is_symlink():
                         continue
 
-                    # Lower-case once; reused for LLM_BENCHMARKS check,
-                    # TOKENS_PER_SAMPLE lookup, and storage.
+                    # Lower-case once; reused for LLM_BENCHMARKS check, TOKENS_PER_SAMPLE lookup, and storage.
                     bench_lower = benchmark_dir.name.lower()
 
                     if llm_only and bench_lower not in LLM_BENCHMARKS:
@@ -450,8 +337,7 @@ def parse_repo(
                         tput    = metrics.get("throughput_samples_per_sec")
                         tps     = TOKENS_PER_SAMPLE.get(bench_lower)
                         tok_sec = tput * tps if (tput and tps) else None
-                        # Per-GPU throughput is the model target variable.
-                        # Roofline bounds are computed per-GPU, so we normalize here.
+                        # Per-GPU throughput is the model target variable; roofline bounds are computed per-GPU, so we normalize here.
                         tok_sec_per_gpu = tok_sec / num_gpus if tok_sec else None
 
                         rows.append({
@@ -462,18 +348,14 @@ def parse_repo(
                             "system_name": system_name,
                             # Hardware (from system JSON)
                             **hw,
-                            # num_gpus overrides **hw: the clamped value (≥ 1)
-                            # must match the divisor used for tok_sec_per_gpu.
+                            # num_gpus overrides **hw: the clamped value (>= 1) must match the divisor used for tok_sec_per_gpu.
                             "num_gpus": num_gpus,
                             # Workload
                             "benchmark":               bench_lower,
                             "benchmark_base":          _base_benchmark(bench_lower),
                             "benchmark_accuracy_tier": _accuracy_tier(bench_lower),
                             "scenario":                scenario,
-                            # precision: best-effort from system_name/framework regex;
-                            # typically None on real data (system names are hardware
-                            # identifiers, not precision-tagged).  Use
-                            # benchmark_accuracy_tier as the reliable proxy feature.
+                            # precision: best-effort regex extraction, typically None on real data — use benchmark_accuracy_tier as the reliable proxy feature.
                             "precision": precision,
                             # Token-rate (per-node and per-GPU)
                             "tokens_per_sample":           tps,
@@ -481,9 +363,7 @@ def parse_repo(
                             "throughput_tok_per_sec_per_gpu": tok_sec_per_gpu,
                             # Performance metrics
                             **{k: v for k, v in metrics.items() if k != "scenario_from_log"},
-                            # Audit trail — relative path preferred; fall back to
-                            # absolute if log_path resolves outside repo_root
-                            # (e.g. via an unexpected symlink).
+                            # Audit trail — relative path preferred; falls back to absolute if log_path resolves outside repo_root (e.g. via an unexpected symlink).
                             "log_path": (
                                 str(log_path.relative_to(repo_root))
                                 if log_path.is_relative_to(repo_root)
@@ -504,16 +384,7 @@ def parse_repos(
     repo_specs: list[tuple[Path | str, str]],
     llm_only: bool = True,
 ) -> pd.DataFrame:
-    """
-    Parse multiple repos and return a single concatenated DataFrame.
-
-    Parameters
-    ----------
-    repo_specs : [(repo_path, round_tag), ...]
-                 e.g. [("data/raw/mlperf/v6.0", "v6.0"), ...]
-                 Paths that don't exist are silently skipped.
-    llm_only   : Passed through to parse_repo.
-    """
+    """Parse multiple repos (list of (repo_path, round_tag) pairs; nonexistent paths silently skipped) and return a single concatenated DataFrame."""
     frames = [
         parse_repo(Path(p), tag, llm_only=llm_only)
         for p, tag in repo_specs
@@ -525,9 +396,7 @@ def parse_repos(
     return pd.concat(frames, ignore_index=True)
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+# --- CLI ---
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(

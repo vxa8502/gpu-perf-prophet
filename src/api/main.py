@@ -1,15 +1,4 @@
-"""
-GPU Perf Prophet — FastAPI application.
-
-Routes
-------
-GET  /health                   liveness probe
-GET  /gpus                     list all GPU ids in the spec DB
-GET  /models                   list all supported LLM model names
-POST /predict                  predict throughput for one (GPU, workload) pair
-POST /predict/batch            vectorised prediction for up to 50 pairs
-POST /recommend                Pareto GPU recommendation for a workload
-"""
+"""GPU Perf Prophet FastAPI app: GET /health, /gpus, /models; POST /predict, /predict/batch, /recommend."""
 
 from __future__ import annotations
 
@@ -32,9 +21,7 @@ from src.data.gpu_spec_db import load_specs
 from src.models.predictor import GpuPredictor, VALID_MODELS
 from src.recommend.recommender import GpuRecommender
 
-# Hard cap on raw request body size — prevents parsing-based DoS before any
-# Pydantic validation runs.  50 PredictRequest objects at ~200 bytes each ≈
-# 10 KB; 1 MB is a generous ceiling that still blocks runaway bodies.
+# Hard cap on raw body size to block parsing-based DoS before Pydantic validation runs; 50 requests ≈ 10 KB, so 1 MB is a generous ceiling.
 _MAX_BODY_BYTES = 1 * 1024 * 1024  # 1 MB
 
 log = logging.getLogger(__name__)
@@ -90,9 +77,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def limit_body_size(request: Request, call_next) -> Response:
-    # Fast path: reject if Content-Length header exceeds the limit.
-    # A malformed or missing Content-Length header is not an error here —
-    # it just means we must check the actual body below.
+    # Fast path: reject via Content-Length if present; a missing/malformed header isn't an error, it just means checking the actual body below.
     cl = request.headers.get("content-length")
     if cl is not None:
         try:
@@ -101,15 +86,11 @@ async def limit_body_size(request: Request, call_next) -> Response:
         except ValueError:
             return Response(status_code=400, content="Invalid Content-Length header")
 
-    # GET / HEAD / OPTIONS carry no request body — no route handler reads one,
-    # so the size limit is irrelevant and buffering is wasted work.
+    # GET/HEAD/OPTIONS carry no request body, so buffering here is wasted work.
     if request.method in {"GET", "HEAD", "OPTIONS"}:
         return await call_next(request)
 
-    # Slow path: consume the actual body so chunked-transfer or lying clients
-    # cannot bypass the Content-Length check above.  Without this step, a
-    # client sending without Content-Length (chunked encoding) would bypass
-    # the limit entirely because uvicorn imposes no default body size cap.
+    # Slow path: consume the body so chunked-transfer clients (no Content-Length) can't bypass the check — uvicorn enforces no default body size cap.
     body = await request.body()
     if len(body) > _MAX_BODY_BYTES:
         return Response(status_code=413, content="Request body too large")
@@ -134,9 +115,7 @@ def _get_recommender() -> GpuRecommender:
     return _recommender
 
 
-# ---------------------------------------------------------------------------
 # Routes
-# ---------------------------------------------------------------------------
 
 @app.get("/health")
 def health() -> dict:

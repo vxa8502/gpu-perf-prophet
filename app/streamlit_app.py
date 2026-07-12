@@ -5,10 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Ensure src/ is importable when running from the project root.
-# Use append (not insert) so the project root is searched LAST — if a file in
-# the project root happened to share a name with a stdlib module, insert(0)
-# would shadow the stdlib for the entire process.
+# Ensure src/ is importable; use append (not insert) so project root is searched LAST — insert(0) would let a same-named file shadow stdlib modules.
 sys.path.append(str(Path(__file__).parent.parent))
 
 import pandas as pd
@@ -38,9 +35,7 @@ _RANKING_OBJECTIVE_LABELS: dict[str, str] = {
     "Lowest cost per 1M tokens": "lowest_cost_per_million_tokens",
 }
 
-# ---------------------------------------------------------------------------
 # Page config
-# ---------------------------------------------------------------------------
 
 st.set_page_config(
     page_title="GPU Perf Prophet",
@@ -53,9 +48,7 @@ st.caption(
     "Powered by roofline physics + XGBoost"
 )
 
-# ---------------------------------------------------------------------------
 # Load model (cached so it runs only once)
-# ---------------------------------------------------------------------------
 
 @st.cache_resource(show_spinner="Loading model …")
 def _load() -> tuple[GpuPredictor, GpuRecommender]:
@@ -66,9 +59,7 @@ def _load() -> tuple[GpuPredictor, GpuRecommender]:
 
 predictor, recommender = _load()
 
-# ---------------------------------------------------------------------------
 # Sidebar — workload inputs
-# ---------------------------------------------------------------------------
 
 with st.sidebar:
     st.header("Workload")
@@ -133,9 +124,7 @@ with st.sidebar:
 
     run_btn = st.button("Recommend", use_container_width=True, type="primary")
 
-# ---------------------------------------------------------------------------
 # Main panel
-# ---------------------------------------------------------------------------
 
 if not run_btn:
     st.info("Configure your workload in the sidebar and click **Recommend**.")
@@ -160,9 +149,7 @@ frontier = result["frontier"]
 dominated = result["dominated"]
 filtered = result["filtered"]
 
-# ---------------------------------------------------------------------------
 # Workload summary
-# ---------------------------------------------------------------------------
 
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Model", workload["model_name"])
@@ -177,9 +164,7 @@ col5.metric(
 
 st.divider()
 
-# ---------------------------------------------------------------------------
 # Pareto frontier
-# ---------------------------------------------------------------------------
 
 _ALL_CANDIDATES = frontier + dominated
 
@@ -212,10 +197,7 @@ _MEMORY_FIT_LABELS = {
     "does_not_fit": "✗ does not fit",
 }
 
-# "sufficient" reads as plain "✓ measured" (no extra noise for the common
-# case); "below_floor" gets its own amber signal rather than being folded
-# into "✓ measured" — real data, but short of this project's 100-row-per-GPU
-# reliability floor, which a bare boolean previously hid.
+# "below_floor" gets its own amber signal rather than folding into "✓ measured" — real data, but short of this project's 100-row-per-GPU reliability floor that a bare boolean previously hid.
 _TRAINING_DATA_LABELS = {
     "sufficient": "✓ measured",
     "below_floor": "⚠ limited data",
@@ -290,9 +272,7 @@ if frontier:
 else:
     st.info("No Pareto-optimal candidates after constraints.")
 
-# ---------------------------------------------------------------------------
 # All candidates (dominated)
-# ---------------------------------------------------------------------------
 
 if dominated:
     with st.expander(f"Other passing GPUs ({len(dominated)} dominated)", expanded=False):
@@ -302,9 +282,7 @@ if dominated:
             hide_index=True,
         )
 
-# ---------------------------------------------------------------------------
 # Filtered GPUs
-# ---------------------------------------------------------------------------
 
 if filtered:
     with st.expander(f"Filtered out ({len(filtered)} GPUs)", expanded=False):
@@ -319,9 +297,7 @@ if filtered:
         ])
         st.dataframe(fdf, use_container_width=True, hide_index=True)
 
-# ---------------------------------------------------------------------------
 # AMD vs NVIDIA context
-# ---------------------------------------------------------------------------
 
 with st.expander("AMD vs NVIDIA breakdown", expanded=False):
     all_rows = _ALL_CANDIDATES

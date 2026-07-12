@@ -1,20 +1,4 @@
-"""
-GPU Perf Prophet — inference module.
-
-Public API
-----------
-GpuPredictor(model_dir)
-    Load the trained XGBoost model and metadata from disk.
-
-predictor.predict(gpu_id, model_name, scenario, accuracy_tier, framework)
-    Predict tokens/sec for one (GPU, workload) pair.
-
-predictor.predict_batch(requests)
-    Vectorised prediction for a list of dicts.
-
-Feature construction mirrors the exact encoding used in
-notebooks/03_model_training.ipynb so the serving path cannot diverge.
-"""
+"""GPU Perf Prophet inference module: GpuPredictor loads the trained XGBoost model and predicts/predict_batch serve tokens/sec, with feature construction mirroring notebooks/03_model_training.ipynb exactly so the serving path cannot diverge."""
 
 from __future__ import annotations
 
@@ -54,18 +38,10 @@ _DEFAULT_MODEL_DIR = Path(__file__).parent.parent.parent / "data" / "models"
 _MAX_META_BYTES: int = 1 * 1024 * 1024   # 1 MB; real metadata JSON is ~1 KB
 _MAX_MODEL_BYTES: int = 50 * 1024 * 1024  # 50 MB; matches the model-disk-size gate's budget
 
-# At serving time we always predict for the most mature software stack —
-# i.e. the most recent MLPerf round.  This corrects the ROCm-maturity
-# confound without exposing round_tag as an API parameter.
+# Serving always predicts for the most mature software stack (most recent MLPerf round), correcting the ROCm-maturity confound without exposing round_tag as an API parameter.
 _SERVING_ROUND: float = float(max(ROUND_ORDINAL.values()))
 
-# This project's per-GPU Must-have minimum ("at least 100 rows per supported
-# GPU SKU... failure to meet the per-GPU minimum is a release blocker for that
-# GPU"). v1 ships all 8 GPUs regardless of whether they clear this floor — a
-# deliberate, disclosed departure from this project's own stated fallback
-# (defer under-floor GPUs to a post-v1 release, or gate them off entirely) —
-# so training_data_tier() exists to make that gap
-# visible to callers instead of collapsing it into a single has-any-data bool.
+# This project's per-GPU Must-have minimum (>=100 rows/GPU); v1 ships all 8 GPUs regardless of whether they clear it — a deliberate, disclosed departure from the stated fallback (defer or gate off under-floor GPUs) — so training_data_tier() makes that gap visible instead of collapsing it into a single has-any-data bool.
 MIN_TRAINING_ROWS_PER_GPU: int = 100
 
 # Feature column order — must match FEATURE_COLS in the training notebook exactly.
@@ -104,12 +80,7 @@ VALID_MODELS: frozenset[str] = frozenset(MODEL_PARAMS.keys())
 
 
 def _selected_precision(gpu_spec: dict, accuracy_tier: str) -> str:
-    """Precision label this (GPU, tier) pair actually runs at.
-
-    Single source of truth for the AMD 99.9-tier FP8 override, shared by the
-    ML feature vector and the KV-cache memory-fit calculation so the two
-    can't silently diverge on which precision a row was scored at.
-    """
+    """Precision label this (GPU, tier) pair actually runs at; single source of truth for the AMD 99.9-tier FP8 override, shared by the ML feature vector and KV-cache memory-fit calc so the two can't diverge."""
     selected_precision = TIER_TO_PRECISION[accuracy_tier]
     if gpu_spec.get("vendor") == "amd" and accuracy_tier == "99.9":
         selected_precision = "fp8"
@@ -119,18 +90,7 @@ def _selected_precision(gpu_spec: dict, accuracy_tier: str) -> str:
 def _check_precision_supported(
     gpu_id: str, gpu_spec: dict, accuracy_tier: str, selected_precision: str
 ) -> None:
-    """Raise ValueError if gpu_id has no native peak TFLOPS for selected_precision.
-
-    When the GPU does not support the requested precision (e.g., FP8
-    on A100), the system must report an 'unsupported precision' error rather
-    than silently substituting another precision. Before this check existed,
-    _build_feature_vector silently substituted the fp16 ceiling for any GPU
-    whose peak_tflops entry for the selected precision was null — e.g.
-    a100_sxm_80gb (Ampere has no native FP8) at accuracy_tier="99" returned a
-    normal-looking prediction that mixed FP8's bytes-per-param (half the
-    memory footprint) with FP16's compute ceiling, a physically inconsistent
-    combination presented with no signal to the caller.
-    """
+    """Raise ValueError if gpu_id has no native peak TFLOPS for selected_precision — without this guard, _build_feature_vector used to silently substitute the fp16 ceiling (e.g. FP8 on Ampere's a100_sxm_80gb), mixing FP8's bytes-per-param with FP16's compute ceiling with no signal to the caller."""
     if not gpu_supports_precision(gpu_spec, selected_precision):
         peak_tflops = gpu_spec.get("peak_tflops") or {}
         valid = sorted(p for p in peak_tflops if gpu_supports_precision(gpu_spec, p))
@@ -151,13 +111,7 @@ def _memory_fit(
     input_tokens: int,
     output_tokens: int,
 ) -> tuple[str, float, float, float]:
-    """Return (verdict, kv_cache_gb, total_gb, utilization) for the memory-fit check.
-
-    Takes bpp (bytes-per-param at the precision this row actually runs) as a
-    parameter rather than gpu_spec+accuracy_tier: the caller already derived
-    it via _selected_precision() to build the feature vector, and re-deriving
-    it here would repeat that lookup for no reason.
-    """
+    """Return (verdict, kv_cache_gb, total_gb, utilization) for the memory-fit check; takes bpp directly since the caller already derived it via _selected_precision() when building the feature vector, avoiding a redundant re-derivation."""
     n_layers, n_kv_heads, head_dim = MODEL_ARCH[model_name]
     kv_gb = kv_cache_gb(
         n_layers, n_kv_heads, head_dim, batch_size, input_tokens, output_tokens, bpp
@@ -177,26 +131,13 @@ def _build_feature_vector(
     framework: str,
     selected_precision: str | None = None,
 ) -> tuple[list[float], float, float]:
-    """Return (feature_vector, roofline_tput, model_size_gb) for one (GPU, workload) pair.
-
-    selected_precision, if given, skips the internal AMD-99.9-tier-FP8-override
-    derivation (_selected_precision) — pass this when the caller already
-    computed it, e.g. to also feed the KV-cache memory-fit calc, so it isn't
-    derived twice for the same (gpu_spec, accuracy_tier) pair.
-
-    roofline_tput and model_size_gb are returned so callers don't re-derive
-    them with a second copy of the AMD precision override logic.
-    """
+    """Return (feature_vector, roofline_tput, model_size_gb) for one (GPU, workload) pair; pass selected_precision when the caller already derived it (e.g. for the KV-cache memory-fit calc too) to avoid deriving it twice, and roofline_tput/model_size_gb are returned so callers don't re-derive them with a second copy of the AMD precision override logic."""
     total_params_b, compute_params_b = MODEL_PARAMS[model_name]
     if selected_precision is None:
         selected_precision = _selected_precision(gpu_spec, accuracy_tier)
     bpp = BYTES_PER_PARAM[selected_precision]
 
-    # Peak TFLOPS at the selected precision. Callers reaching this point via
-    # GpuPredictor.predict()/predict_batch() have already passed
-    # _check_precision_supported, so this is never None/NaN in that
-    # path; the fp16 fallback below only guards direct callers (e.g. tests)
-    # that build a feature vector without going through that check.
+    # Peak TFLOPS at the selected precision; never None/NaN via GpuPredictor.predict()/predict_batch() (already passed _check_precision_supported) — the fp16 fallback below only guards direct callers (e.g. tests) that skip that check.
     pt = gpu_spec.get("peak_tflops") or {}
     peak_tflops = pt.get(selected_precision)
     if peak_tflops is None or (isinstance(peak_tflops, float) and np.isnan(peak_tflops)):
@@ -259,10 +200,7 @@ class GpuPredictor:
         meta_path = model_dir / "feature_metadata.json"
         model_path = model_dir / "prophet_v1.json"
 
-        # File guards — mirrors the policy in load_specs() and _load_pricing().
-        # Symlink checks prevent path-traversal redirects; size caps prevent
-        # unbounded memory consumption.  Applied before open() so the checks
-        # are not compiled away (unlike assert statements under python -O).
+        # File guards (mirrors load_specs()/_load_pricing()): symlink checks block path-traversal redirects, size caps block unbounded memory use; applied before open() so they're never compiled away like assert under python -O.
         for _path, _cap in ((meta_path, _MAX_META_BYTES), (model_path, _MAX_MODEL_BYTES)):
             try:
                 _st = _path.lstat()
@@ -278,8 +216,7 @@ class GpuPredictor:
         with meta_path.open() as f:
             self._meta = json.load(f)
 
-        # assert is compiled away under `python -O` / PYTHONOPTIMIZE=1 — use
-        # explicit raise so this check is never a no-op in any deployment mode.
+        # Explicit raise (not assert) so this check is never a no-op under `python -O` / PYTHONOPTIMIZE=1.
         if self._meta["feature_cols"] != FEATURE_COLS:
             raise ValueError(
                 "feature_metadata.json feature_cols mismatch — retrain the model. "
@@ -290,21 +227,14 @@ class GpuPredictor:
         self._model = xgb.XGBRegressor()
         self._model.load_model(str(model_path))
 
-        # GPUs with zero rows in training never had a single real measurement
-        # behind their predictions — the model extrapolates purely from specs.
-        # Required key (not .get()) so an old feature_metadata.json predating
-        # this field fails loudly at load time rather than silently reporting
-        # every GPU as having real training data.
+        # GPUs with zero training rows extrapolate purely from specs; required key (not .get()) so an old feature_metadata.json predating this field fails loudly rather than silently reporting every GPU as having real training data.
         if "trained_gpu_ids" not in self._meta:
             raise ValueError(
                 "feature_metadata.json missing 'trained_gpu_ids' — retrain the model."
             )
         self._trained_gpu_ids: frozenset[str] = frozenset(self._meta["trained_gpu_ids"])
 
-        # Per-GPU row counts behind training_data_tier() — same required-key,
-        # fail-loudly convention as trained_gpu_ids above (an old artifact
-        # predating this field should not silently report every trained GPU
-        # as meeting the 100-row floor).
+        # Per-GPU row counts behind training_data_tier() — same required-key, fail-loudly convention as trained_gpu_ids above, so an old artifact doesn't silently report every trained GPU as meeting the 100-row floor.
         if "trained_gpu_row_counts" not in self._meta:
             raise ValueError(
                 "feature_metadata.json missing 'trained_gpu_row_counts' — retrain the model."
@@ -312,10 +242,7 @@ class GpuPredictor:
         self._trained_gpu_row_counts: dict[str, int] = self._meta["trained_gpu_row_counts"]
 
         specs = load_specs()
-        # Deep-copy each spec dict so _id_map holds independent objects.
-        # load_specs() is lru_cache'd and returns its live list; storing direct
-        # references means any write to a spec value (e.g. caching a derived
-        # field) would silently corrupt the global cache for all callers.
+        # Deep-copy each spec dict: load_specs() is lru_cache'd and returns its live list, so storing direct references would let any write silently corrupt the global cache for all callers.
         self._id_map: dict[str, dict] = {s["id"]: copy.deepcopy(s) for s in specs}
 
         log.info(
@@ -323,23 +250,10 @@ class GpuPredictor:
             model_path.name, len(FEATURE_COLS), len(self._id_map),
         )
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    # ---- Public API ----
 
     def training_data_tier(self, gpu_id: str) -> str:
-        """Where gpu_id's training-row count sits relative to the reliability floor.
-
-        "none": zero real measured rows — the prediction is pure extrapolation
-            from specs via other GPUs' learned spec→efficiency relationship,
-            never validated against a single real measurement for this SKU.
-        "below_floor": at least one real row, but fewer than
-            MIN_TRAINING_ROWS_PER_GPU (100) — better than pure extrapolation,
-            but short of the per-GPU Must-have minimum this project sets; see the
-            module-level comment on MIN_TRAINING_ROWS_PER_GPU for why v1
-            ships these GPUs anyway rather than deferring or dropping them.
-        "sufficient": meets or exceeds the 100-row floor.
-        """
+        """Where gpu_id's training-row count sits relative to the reliability floor: "none" (zero real rows, pure spec extrapolation), "below_floor" (nonzero but under MIN_TRAINING_ROWS_PER_GPU=100; see the module-level comment on that constant for why v1 ships these anyway), or "sufficient" (meets or exceeds the 100-row floor)."""
         n = self._trained_gpu_row_counts.get(gpu_id, 0)
         if n == 0:
             return "none"
@@ -348,12 +262,7 @@ class GpuPredictor:
         return "sufficient"
 
     def has_training_data(self, gpu_id: str) -> bool:
-        """Whether gpu_id had at least one real measured row in training.
-
-        True for both "below_floor" and "sufficient" tiers — check
-        training_data_tier() for whether that data actually clears the
-        per-GPU reliability floor.
-        """
+        """Whether gpu_id had at least one real measured row in training; True for both "below_floor" and "sufficient" tiers, so check training_data_tier() for whether it actually clears the reliability floor."""
         return self.training_data_tier(gpu_id) != "none"
 
     def predict(
@@ -368,20 +277,7 @@ class GpuPredictor:
         input_tokens: int = DEFAULT_INPUT_TOKENS,
         output_tokens: int = DEFAULT_OUTPUT_TOKENS,
     ) -> dict:
-        """Predict inference throughput for one (GPU, workload) pair.
-
-        batch_size/input_tokens/output_tokens drive the KV-cache memory-fit
-        calculation only — they are not ML features, since
-        MLPerf training rows carry no per-row batch/context-length info.
-
-        Returns
-        -------
-        dict with keys:
-            gpu_id, model_name, scenario, accuracy_tier, framework,
-            pred_throughput_tok_per_sec, roofline_tput_tok_per_sec,
-            efficiency_ratio, vram_fits, memory_fit_verdict, kv_cache_gb,
-            memory_total_gb, vram_utilization, has_training_data
-        """
+        """Predict inference throughput for one (GPU, workload) pair; batch_size/input_tokens/output_tokens drive the KV-cache memory-fit calc only (not ML features, since MLPerf rows carry no per-row batch/context-length info); returns a dict with gpu_id, model_name, scenario, accuracy_tier, framework, pred_throughput_tok_per_sec, roofline_tput_tok_per_sec, efficiency_ratio, vram_fits, memory_fit_verdict, kv_cache_gb, memory_total_gb, vram_utilization, has_training_data."""
         selected_precision = self._validate(
             gpu_id, model_name, scenario, accuracy_tier, framework,
             batch_size, input_tokens, output_tokens,
@@ -401,8 +297,7 @@ class GpuPredictor:
         pred_eff = float(self._model.predict(X)[0])
         pred_tput = pred_eff * roofline_tput
 
-        # Enforce roofline ceiling on the output (< 2% violation rate in CV;
-        # clamp rather than raise so API remains responsive).
+        # Enforce roofline ceiling on the output (< 2% violation rate in CV; clamp rather than raise so API remains responsive).
         pred_tput = min(pred_tput, roofline_tput)
 
         verdict, kv_gb, total_gb, utilization = _memory_fit(
@@ -425,32 +320,20 @@ class GpuPredictor:
             "pred_throughput_tok_per_sec": round(pred_tput, 2),
             "roofline_tput_tok_per_sec": round(roofline_tput, 2),
             "efficiency_ratio": round(pred_eff, 4),
-            # True for "fits" AND "tight" — only "does_not_fit" is False.
-            # Check memory_fit_verdict for the three-tier detail.
+            # True for "fits" AND "tight" — only "does_not_fit" is False; check memory_fit_verdict for the three-tier detail.
             "vram_fits": verdict != "does_not_fit",
             "memory_fit_verdict": verdict,
             "kv_cache_gb": round(kv_gb, 2),
             "memory_total_gb": round(total_gb, 2),
             "vram_utilization": round(utilization, 4),
             "model_size_gb": round(model_size_gb, 2),
-            # True for both "below_floor" and "sufficient" — only "none" is
-            # False. Check training_data_tier for the three-tier detail.
+            # True for both "below_floor" and "sufficient" — only "none" is False; check training_data_tier for the three-tier detail.
             "has_training_data": tier != "none",
             "training_data_tier": tier,
         }
 
     def predict_batch(self, requests: list[dict]) -> list[dict]:
-        """Vectorised prediction over a list of request dicts.
-
-        Each dict must contain the same keys as predict() keyword args.
-        An optional "memory_fit" key — a (verdict, kv_cache_gb, memory_total_gb,
-        vram_utilization) tuple — is used verbatim instead of being recomputed
-        if present. GpuRecommender already computes this per candidate GPU to
-        decide its VRAM pre-filter, before calling predict_batch() on the
-        survivors; without this, the exact same KV-cache/threshold math would
-        run twice per GPU on every recommend() call. Absent for any other
-        caller (e.g. the /predict/batch endpoint), which is unaffected.
-        """
+        """Vectorised prediction over a list of request dicts (same keys as predict()'s kwargs); an optional "memory_fit" tuple is used verbatim instead of recomputed, since GpuRecommender already computes it per candidate GPU for its VRAM pre-filter before calling predict_batch() — without this, the same KV-cache/threshold math would run twice per GPU per recommend() call (other callers, e.g. /predict/batch, are unaffected since the key is simply absent)."""
         if not requests:
             return []
 
@@ -512,8 +395,7 @@ class GpuPredictor:
                 "kv_cache_gb": round(kv_gb, 2),
                 "memory_total_gb": round(total_gb, 2),
                 "vram_utilization": round(utilization, 4),
-                # True for both "below_floor" and "sufficient" — only "none"
-                # is False. Check training_data_tier for the three-tier detail.
+                # True for both "below_floor" and "sufficient" — only "none" is False; check training_data_tier for the three-tier detail.
                 "has_training_data": tier != "none",
                 "training_data_tier": tier,
             })
@@ -532,9 +414,7 @@ class GpuPredictor:
             })
         return results
 
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
+    # ---- Internal ----
 
     def _validate(
         self,
@@ -547,11 +427,7 @@ class GpuPredictor:
         input_tokens: int = DEFAULT_INPUT_TOKENS,
         output_tokens: int = DEFAULT_OUTPUT_TOKENS,
     ) -> str:
-        """Validate every field; return the selected_precision derived along
-        the way so callers don't need a second _selected_precision() call for
-        the same (gpu_spec, accuracy_tier) pair (same reason
-        _build_feature_vector()/_memory_fit() take selected_precision/bpp as
-        parameters instead of re-deriving them)."""
+        """Validate every field; return the selected_precision derived along the way so callers don't need a second _selected_precision() call (same reason _build_feature_vector()/_memory_fit() take selected_precision/bpp as parameters instead of re-deriving them)."""
         if gpu_id not in self._id_map:
             raise ValueError(
                 f"Unknown gpu_id {gpu_id!r}. "
@@ -570,11 +446,7 @@ class GpuPredictor:
             raise ValueError(
                 f"Invalid accuracy_tier {accuracy_tier!r}. Valid: {sorted(VALID_TIERS)}"
             )
-        # gpu_id/accuracy_tier are both known-valid at this point (checked
-        # above), so this can never KeyError. Folded into _validate() rather
-        # than left as a separate call each caller must remember to make —
-        # the same "one shared gate, not two things that must both be called"
-        # principle validate_serving_shape already established.
+        # gpu_id/accuracy_tier are known-valid here (checked above), so this can never KeyError; folded into _validate() rather than a separate call, the same "one shared gate" principle validate_serving_shape already established.
         gpu_spec = self._id_map[gpu_id]
         selected_precision = _selected_precision(gpu_spec, accuracy_tier)
         _check_precision_supported(gpu_id, gpu_spec, accuracy_tier, selected_precision)

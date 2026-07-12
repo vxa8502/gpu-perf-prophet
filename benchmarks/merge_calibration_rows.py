@@ -1,24 +1,5 @@
 #!/usr/bin/env python3
-"""
-Merge MI300X calibration results into the GPU Perf Prophet training set.
-
-Run this on your local machine after SCP-ing mi300x_calibration_results.csv
-back from AMD Developer Cloud.
-
-Steps
------
-1. Reads mi300x_calibration_results.csv
-2. Constructs a raw-MLPerf-format DataFrame (same schema as the parser output)
-3. Calls build_training_df() to compute all features (roofline, precision, etc.)
-4. Appends to data/processed/mlperf_features.parquet
-5. Re-trains the production model via src/models/train_final.py
-
-Usage
------
-    python benchmarks/merge_calibration_rows.py --csv benchmarks/mi300x_calibration_results.csv
-    python benchmarks/merge_calibration_rows.py --csv benchmarks/mi300x_calibration_results.csv --dry-run
-    python benchmarks/merge_calibration_rows.py --csv benchmarks/mi300x_calibration_results.csv --no-retrain
-"""
+"""Merge MI300X calibration CSV into the training set: builds raw-MLPerf-format rows, runs feature engineering, appends to mlperf_features.parquet, and retrains via train_final.py."""
 from __future__ import annotations
 
 import argparse
@@ -45,16 +26,10 @@ logging.basicConfig(
 
 _FEATURES_PARQUET = _PROJECT_ROOT / "data" / "processed" / "mlperf_features.parquet"
 
-# ---------------------------------------------------------------------------
 # Construct raw-MLPerf-format rows from calibration CSV
-# ---------------------------------------------------------------------------
 
 def _build_raw_df(csv_path: Path) -> pd.DataFrame:
-    """Read calibration CSV and return a DataFrame in raw-MLPerf parser format.
-
-    The schema matches what mlperf_parser.py produces, so build_training_df()
-    can process it without modification.
-    """
+    """Read calibration CSV and return a DataFrame matching mlperf_parser.py's schema, so build_training_df() can process it unmodified."""
     raw = pd.read_csv(csv_path)
 
     # Drop failed runs (throughput == 0 means the run errored out)
@@ -128,9 +103,7 @@ def _build_raw_df(csv_path: Path) -> pd.DataFrame:
     return df
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Merge MI300X calibration results into training set")

@@ -1,10 +1,4 @@
-"""
-Tests for src/models/train_final.py's `_load_validation_metrics`.
-
-Strategy: unit-test the pure load function against a synthetic tmp_path
-file, not the real data/models/logo_cv_metrics.json — these tests must not
-depend on notebooks/03 having been re-run recently.
-"""
+"""Tests for src/models/train_final.py's `_load_validation_metrics`, using a synthetic tmp_path file rather than the real data/models/logo_cv_metrics.json so tests don't depend on notebooks/03 having been re-run recently."""
 
 from __future__ import annotations
 
@@ -28,17 +22,12 @@ class TestLoadValidationMetrics:
         assert _load_validation_metrics(path) == payload
 
     def test_default_path_does_not_raise(self):
-        # Whether or not the real file happens to exist on this machine,
-        # calling with no argument must never raise — it's a best-effort
-        # informational read, not a hard requirement of train_and_save().
+        # Whether or not the real file exists on this machine, calling with no argument must never raise — it's a best-effort informational read, not a hard requirement of train_and_save().
         result = _load_validation_metrics()
         assert result is None or isinstance(result, dict)
 
     def test_refuses_symlinked_file(self, tmp_path):
-        """Same guard predictor.py applies to feature_metadata.json/
-        prophet_v1.json — a symlinked metrics file could point at
-        attacker-controlled content that gets committed into
-        feature_metadata.json's validation_metrics field with no warning."""
+        """Same guard predictor.py applies to feature_metadata.json/prophet_v1.json — a symlinked metrics file could point at attacker-controlled content committed into validation_metrics with no warning."""
         real = tmp_path / "real.json"
         real.write_text(json.dumps({"primary": {"mape": 0.0}}))
         link = tmp_path / "link.json"

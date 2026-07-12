@@ -1,27 +1,5 @@
 #!/usr/bin/env python3
-"""
-MI300X calibration benchmark runner for GPU Perf Prophet.
-
-Runs on AMD Developer Cloud (ROCm 7.x) with vLLM installed.
-Measures output throughput (tok/s) for each (model, precision, scenario) config
-and appends results to mi300x_calibration_results.csv.
-
-Requirements (AMD Dev Cloud):
-    pip install vllm>=0.6 huggingface_hub
-
-Gated models (llama2-70b, llama3.1-8b) require a HuggingFace token:
-    export HF_TOKEN=hf_...
-    huggingface-cli login --token $HF_TOKEN
-
-Usage:
-    python run_mi300x_calibration.py                         # full sweep
-    python run_mi300x_calibration.py --dry-run               # print configs only
-    python run_mi300x_calibration.py --models gptj mixtral-8x7b   # subset
-    python run_mi300x_calibration.py --resume                # skip completed rows
-
-Output:
-    mi300x_calibration_results.csv  (appended on each run; safe to resume)
-"""
+"""MI300X calibration benchmark runner: measures vLLM output throughput per (model, precision, scenario) on AMD Dev Cloud (ROCm) and appends results to mi300x_calibration_results.csv."""
 from __future__ import annotations
 
 import argparse
@@ -42,9 +20,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-# ---------------------------------------------------------------------------
 # Sweep matrix
-# ---------------------------------------------------------------------------
 
 @dataclass
 class ModelConfig:
@@ -56,17 +32,11 @@ class ModelConfig:
     n_samples_server: int       # number of prompts for Server (lower-concurrency) run
     needs_hf_token: bool = False
     max_model_len: Optional[int] = None  # set if model's default context is too large
-    # trust_remote_code must remain False unless the model repo uses a custom
-    # architecture class not built into vLLM — setting it True allows the model
-    # repo to execute arbitrary Python at load time (RCE if repo is compromised).
+    # trust_remote_code must stay False unless the repo needs a custom architecture — True lets the repo run arbitrary code at load time (RCE risk).
     trust_remote_code: bool = False
 
 
-# MLPerf standard output lengths:
-#   gptj        128 tokens  (OpenOCR fixed)
-#   llama2-70b  294 tokens  (OpenOCR mean, MLPerf v4.1+)
-#   mixtral-8x7b 145 tokens (OpenOCR mean)
-#   llama3.1-8b  294 tokens (same OpenOCR dataset as llama2-70b per MLPerf rules)
+# MLPerf standard output lengths: gptj=128, llama2-70b=294, mixtral-8x7b=145, llama3.1-8b=294 tok (OpenOCR dataset, MLPerf v4.1+ rules).
 MODEL_CONFIGS: list[ModelConfig] = [
     ModelConfig(
         benchmark_base="gptj",
@@ -112,8 +82,7 @@ class PrecisionConfig:
     name: str                          # "bf16" or "fp8"
     vllm_dtype: str                    # passed as dtype= to LLM()
     vllm_quantization: Optional[str]   # passed as quantization= to LLM()
-    # MLPerf benchmark_accuracy_tiers this precision maps to.
-    # fp8 covers both "99" AND "99.9" for AMD (AMD achieves 99.9 accuracy with FP8).
+    # MLPerf accuracy tiers this precision maps to; fp8 covers both "99" and "99.9" for AMD.
     tiers: list[str] = field(default_factory=list)
 
 
@@ -138,13 +107,10 @@ SCENARIOS = ["Offline", "Server"]
 # GPU identifier that must match an alias in data/gpu_specs.yaml
 GPU_NAME = "AMD Instinct MI300X"
 
-# Use the most recent MLPerf round tag so mlperf_round_num maps to 4 (max maturity)
-# in the training pipeline — we're running on a current ROCm/vLLM stack.
+# Use the most recent MLPerf round tag so mlperf_round_num maps to 4 (max maturity) — we're on a current ROCm/vLLM stack.
 ROUND_TAG = "v6.0"
 
-# ---------------------------------------------------------------------------
 # CSV schema
-# ---------------------------------------------------------------------------
 
 CSV_FIELDS = [
     "gpu_name",
@@ -165,9 +131,7 @@ CSV_FIELDS = [
     "notes",
 ]
 
-# ---------------------------------------------------------------------------
 # vLLM helpers
-# ---------------------------------------------------------------------------
 
 def _rocm_version() -> str:
     """Return ROCm version string, or 'unknown'."""
@@ -232,13 +196,8 @@ def _unload_model(llm) -> None:
 
 
 def _make_prompts(n: int, input_len: int) -> list[list[int]]:
-    """Return n identical prompt_token_ids of length input_len.
-
-    Using token ID 1 (BOS in most tokenizers) gives exact token-count control
-    without running a tokenizer.  The content doesn't affect throughput measurement.
-    """
-    # Each prompt must be an independent list — vLLM may mutate the lists
-    # during tokenization, and [prompt] * n would share a single object.
+    """Return n identical prompt_token_ids of length input_len, using token ID 1 for exact token-count control without running a tokenizer."""
+    # Each prompt must be an independent list — vLLM may mutate lists during tokenization, and [prompt] * n would share one object.
     prompt = [1] * input_len
     return [list(prompt) for _ in range(n)]
 
@@ -250,10 +209,7 @@ def _run_throughput(
     *,
     warmup: bool = True,
 ) -> tuple[float, int]:
-    """Run a throughput pass and return (elapsed_seconds, total_output_tokens).
-
-    If warmup=True, runs one warm-up batch first (results discarded).
-    """
+    """Run a throughput pass and return (elapsed_seconds, total_output_tokens); if warmup=True, runs a discarded warm-up batch first."""
     from vllm import SamplingParams
 
     params = SamplingParams(
@@ -278,9 +234,7 @@ def _run_throughput(
     return elapsed, total_out
 
 
-# ---------------------------------------------------------------------------
 # CSV helpers
-# ---------------------------------------------------------------------------
 
 def _completed_keys(csv_path: Path) -> set[tuple]:
     """Return set of (benchmark_base, precision_used, scenario) already in CSV."""
@@ -303,9 +257,7 @@ def _append_row(csv_path: Path, row: dict) -> None:
         writer.writerow(row)
 
 
-# ---------------------------------------------------------------------------
 # Main sweep
-# ---------------------------------------------------------------------------
 
 def run_sweep(
     model_filter: Optional[list[str]],
@@ -386,8 +338,7 @@ def run_sweep(
                         "  => %.1f tok/s  (%d tokens in %.1f s)",
                         tput, total_out, elapsed,
                     )
-                    # Write one row per (model, precision, scenario, tier) combination.
-                    # fp8 covers both "99" and "99.9" tiers for AMD MI300X.
+                    # Write one row per (model, precision, scenario, tier) — fp8 covers both "99" and "99.9" tiers for AMD MI300X.
                     for tier in prec.tiers:
                         row = {
                             "gpu_name":                GPU_NAME,
@@ -439,9 +390,7 @@ def run_sweep(
     log.info("Sweep complete. Results: %s", output)
 
 
-# ---------------------------------------------------------------------------
 # CLI
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="MI300X calibration benchmark runner")

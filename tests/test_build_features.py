@@ -1,10 +1,4 @@
-"""
-Tests for src/features/build_features.py.
-
-Strategy: unit-test the pure functions with hand-computed expected values,
-then run a smoke-test of the full pipeline on a synthetic fixture DataFrame
-that mimics the enriched MLPerf schema (avoiding a real parquet dependency).
-"""
+"""Tests for src/features/build_features.py: hand-computed expected values for the pure functions, plus a full-pipeline smoke test on a synthetic fixture DataFrame (avoids a real parquet dependency)."""
 
 from __future__ import annotations
 
@@ -30,9 +24,7 @@ from src.features.build_features import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+# --- Fixtures ---
 
 @pytest.fixture()
 def spec_path(tmp_path: Path) -> Path:
@@ -188,8 +180,7 @@ def _make_raw_df(spec_path: Path) -> pd.DataFrame:
             "tpot_p99_ms": None,
             "log_path": "fake/path3",
         },
-        # Unknown GPU — should be dropped (no spec DB entry → gpu_hbm_bandwidth_tbps is NaN
-        # → caught by the missing-specs guard in build_training_df, not by gpu_in_model_scope)
+        # Unknown GPU has no spec DB entry (gpu_hbm_bandwidth_tbps NaN) — dropped by the missing-specs guard in build_training_df, not by gpu_in_model_scope.
         {
             "round": "v5.0",
             "division": "closed",
@@ -223,19 +214,13 @@ def _make_raw_df(spec_path: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# ---------------------------------------------------------------------------
-# roofline_ceilings
-# ---------------------------------------------------------------------------
+# --- roofline_ceilings ---
 
 class TestRooflineCeilings:
     """Hand-verify the bandwidth and compute ceilings for known GPU–model pairs."""
 
     def test_h200_llama2_70b_fp16(self):
-        # H200 SXM: HBM BW = 4.8 TB/s, FP16 peak = 989.4 TFLOPS
-        # Llama2-70B: 70B params (dense, total == compute)
-        # BW ceiling  = 4.8e12 / (70e9 × 2)        = 34.29 tok/s
-        # Compute ceil = 989.4e12 / (2 × 70e9)      = 7067.14 tok/s
-        # roofline_tput = compute_ceil (not BW limit)
+        # H200 SXM FP16 llama2-70b is compute-bound (7067.14 tok/s ceiling vs. 34.29 tok/s BW ceiling), so roofline_tput must equal the compute ceiling, not the BW one.
         bw, compute, roofline = roofline_ceilings(
             total_params_b=70.0,
             compute_params_b=70.0,
@@ -248,9 +233,7 @@ class TestRooflineCeilings:
         assert roofline == compute
 
     def test_mi300x_llama2_70b_fp8(self):
-        # MI300X: HBM BW = 5.3 TB/s, FP8 peak = 2614.9 TFLOPS
-        # BW ceiling  = 5.3e12 / (70e9 × 1)        = 75.71 tok/s
-        # Compute ceil = 2614.9e12 / (2 × 70e9)     = 18677.86 tok/s
+        # MI300X FP8 llama2-70b: compute ceiling (18677.86 tok/s) again dwarfs the BW ceiling (75.71 tok/s).
         bw, compute, roofline = roofline_ceilings(
             total_params_b=70.0,
             compute_params_b=70.0,
@@ -263,9 +246,7 @@ class TestRooflineCeilings:
         assert roofline == compute
 
     def test_moe_uses_active_params_for_compute(self):
-        # Mixtral 8×7B: total=46.7B, active=14.1B
-        # BW ceiling uses total (all weights in HBM): 5.3e12 / (46.7e9 × 2)
-        # Compute ceiling uses active: 1307.4e12 / (2 × 14.1e9)
+        # MoE (Mixtral 8x7B): BW ceiling uses total params (all weights resident in HBM) while compute ceiling uses only active params.
         bw, compute, roofline = roofline_ceilings(
             total_params_b=46.7,
             compute_params_b=14.1,
@@ -278,10 +259,7 @@ class TestRooflineCeilings:
         assert roofline == compute
 
     def test_roofline_equals_compute_ceiling(self):
-        # roofline_tput is defined as the compute ceiling (a project-level choice:
-        # the model learns the hardware efficiency ratio relative to compute, not BW).
-        # All three cases are compute-bound (compute >> bw) by design — the invariant
-        # is that roofline == compute regardless of what bw_tbps is.
+        # roofline_tput is defined as the compute ceiling by project convention (model learns efficiency relative to compute, not BW); invariant holds regardless of bw_tbps since all three cases are compute-bound by design.
         for bw_tbps, tflops in [(0.3, 121.6), (4.8, 989.4), (8.0, 2620.0)]:
             bw, compute, roofline = roofline_ceilings(
                 total_params_b=70.0,
@@ -301,14 +279,11 @@ class TestRooflineCeilings:
         assert math.isclose(bw_fp8, 2 * bw_fp16, rel_tol=1e-9)
 
 
-# ---------------------------------------------------------------------------
-# kv_cache_gb / memory_fit_verdict
-# ---------------------------------------------------------------------------
+# --- kv_cache_gb / memory_fit_verdict ---
 
 class TestKvCacheGb:
     def test_hand_computed_llama2_70b(self):
-        # Hand-worked example: Llama-2-70B, FP16, batch 16, in 1024 / out 256
-        # kv = 2·16·1280·80·8·128·2 bytes ≈ 6.71 GB
+        # Hand-worked: Llama-2-70B FP16 batch 16 in1024/out256 -> kv = 2*16*1280*80*8*128*2 bytes ≈ 6.71 GB.
         kv = kv_cache_gb(
             n_layers=80, n_kv_heads=8, head_dim=128,
             batch_size=16, input_tokens=1024, output_tokens=256,
@@ -323,8 +298,7 @@ class TestKvCacheGb:
         assert math.isclose(kv8, 8 * kv1, rel_tol=1e-9)
 
     def test_gqa_shrinks_cache_vs_mha(self):
-        # Same layer/head_dim geometry, only n_kv_heads changes: GQA (n_kv_heads=8)
-        # must be proportionally smaller than MHA (n_kv_heads=64, i.e. n_heads).
+        # Same layer/head_dim geometry, only n_kv_heads changes: GQA (8 kv-heads) must be proportionally smaller than MHA (64 kv-heads == n_heads).
         mha = kv_cache_gb(80, 64, 128, 32, 1024, 256, 2.0)
         gqa = kv_cache_gb(80, 8, 128, 32, 1024, 256, 2.0)
         assert math.isclose(gqa, mha / 8, rel_tol=1e-9)
@@ -337,14 +311,11 @@ class TestKvCacheGb:
 
 class TestMemoryFitVerdict:
     def test_hand_computed_llama2_70b_mi300x_fits(self):
-        # Hand-worked: weights=140 GB, kv≈6.71 GB, total=(140+6.71)·1.10≈161.4 GB
-        # MI300X (192 GB): util ≈ 0.84 → fits
+        # Hand-worked: weights=140 GB, kv≈6.71 GB, total=(140+6.71)*1.10≈161.4 GB, MI300X (192 GB) -> util≈0.84 -> fits.
         verdict, total_gb, util = memory_fit_verdict(140.0, 6.71, 192.0)
         expected_total = (140.0 + 6.71) * 1.10
         assert math.isclose(total_gb, expected_total, rel_tol=1e-9)
-        # Compare against expected_total, not the function's own returned
-        # total_gb — reusing total_gb here would only check that the function
-        # agrees with itself, not that utilization is actually total/vram.
+        # Compare against expected_total, not the function's own returned total_gb — reusing it would only check self-agreement, not that utilization is really total/vram.
         assert math.isclose(util, expected_total / 192.0, rel_tol=1e-9)
         assert verdict == "fits"
 
@@ -363,8 +334,7 @@ class TestMemoryFitVerdict:
         (1.50, "does_not_fit"),
     ])
     def test_verdict_thresholds(self, util_target, expected):
-        # Solve for weights_gb so total_gb/vram_gb == util_target exactly,
-        # with kv_gb=0 for a clean boundary check.
+        # Solve for weights_gb so total_gb/vram_gb == util_target exactly, with kv_gb=0 for a clean boundary check.
         vram_gb = 100.0
         weights_gb = util_target * vram_gb / 1.10
         verdict, _, util = memory_fit_verdict(weights_gb, 0.0, vram_gb)
@@ -373,8 +343,7 @@ class TestMemoryFitVerdict:
 
 
 class TestCostPerMillionTokens:
-    """(usd_per_hour / 3600) / (tok/s / 1e6). Added alongside
-    the ranking_objective implementation."""
+    """(usd_per_hour / 3600) / (tok/s / 1e6). Added alongside the ranking_objective implementation."""
 
     def test_hand_computed_value(self):
         # $2/hr, 1000 tok/s -> ($2/3600) / (1000/1e6) = 5.5556e-4 / 1e-3
@@ -387,8 +356,7 @@ class TestCostPerMillionTokens:
         assert cost_per_million_tokens(None, 1000.0) is None
 
     def test_zero_throughput_returns_none(self):
-        # A does_not_fit / precision-rejected candidate reports 0.0 throughput
-        # — dividing by it would raise ZeroDivisionError, not a meaningful cost.
+        # A does_not_fit / precision-rejected candidate reports 0.0 throughput — dividing by it would raise ZeroDivisionError, not give a meaningful cost.
         assert cost_per_million_tokens(2.0, 0.0) is None
 
     def test_negative_throughput_returns_none(self):
@@ -400,9 +368,7 @@ class TestCostPerMillionTokens:
         assert cheap < expensive
 
 
-# ---------------------------------------------------------------------------
-# Reference tables
-# ---------------------------------------------------------------------------
+# --- Reference tables ---
 
 class TestReferenceTables:
     def test_all_model_params_have_positive_values(self):
@@ -412,15 +378,11 @@ class TestReferenceTables:
             assert compute <= total, f"{name}: compute_params_b must be ≤ total_params_b"
 
     def test_model_arch_covers_all_model_params(self):
-        # Every model MODEL_PARAMS knows about must have a MODEL_ARCH entry —
-        # a missing key here would KeyError at serving time inside
-        # GpuPredictor._memory_fit rather than fail loudly at import time.
+        # Every model MODEL_PARAMS knows about must have a MODEL_ARCH entry — a missing key here would KeyError at serving time inside GpuPredictor._memory_fit instead of failing loudly at import time.
         assert set(MODEL_ARCH.keys()) == set(MODEL_PARAMS.keys())
 
     def test_model_arch_values_are_positive(self):
-        # Guard against a zero-assertion pass: if MODEL_ARCH were ever empty,
-        # the loop below would silently check nothing and this test would
-        # still report green.
+        # Guard against a zero-assertion pass: if MODEL_ARCH were ever empty, the loop below would silently check nothing and this test would still report green.
         assert MODEL_ARCH, "MODEL_ARCH is empty — nothing would be checked below"
         for name, (n_layers, n_kv_heads, head_dim) in MODEL_ARCH.items():
             assert n_layers > 0, f"{name}: n_layers must be > 0"
@@ -449,9 +411,7 @@ class TestReferenceTables:
             assert TIER_TO_PRECISION[tier] in BYTES_PER_PARAM
 
 
-# ---------------------------------------------------------------------------
-# _normalize_framework
-# ---------------------------------------------------------------------------
+# --- _normalize_framework ---
 
 class TestNormalizeFramework:
     @pytest.mark.parametrize("raw,expected", [
@@ -471,9 +431,7 @@ class TestNormalizeFramework:
         assert _normalize_framework(raw) == expected
 
 
-# ---------------------------------------------------------------------------
-# build_training_df — integration smoke test
-# ---------------------------------------------------------------------------
+# --- build_training_df — integration smoke test ---
 
 class TestBuildTrainingDf:
     def test_filters_invalid_and_missing_spec_rows(self, spec_path, tmp_path):
@@ -481,8 +439,7 @@ class TestBuildTrainingDf:
         feat = build_training_df(raw, spec_path=spec_path)
         # invalid row (result_valid=False) and unknown-GPU row (no spec → NaN HBM BW) are dropped
         assert len(feat) == 2
-        # Verify the correct 2 rows survived — a filter bug that kept the wrong pair
-        # (e.g. result_valid=False row + unknown-GPU row) would still give len == 2.
+        # Verify the correct 2 rows survived — a filter bug that kept the wrong pair (e.g. result_valid=False + unknown-GPU rows) would still give len == 2.
         assert set(feat["canonical_gpu_id"]) == {"h200_sxm", "mi300x"}
 
     def test_new_columns_present(self, spec_path):
@@ -540,8 +497,7 @@ class TestBuildTrainingDf:
         h200_row = feat[feat["canonical_gpu_id"] == "h200_sxm"].iloc[0]
         assert h200_row["selected_precision"] == "fp8"
         assert h200_row["bytes_per_param"] == BYTES_PER_PARAM["fp8"]
-        # Pin the actual TFLOPS value — catches bugs in the vectorised peak-TFLOPS
-        # selection (e.g. accidentally returning fp16=989.4 instead of fp8=1978.9).
+        # Pin the actual TFLOPS value — catches bugs in the vectorised peak-TFLOPS selection (e.g. accidentally returning fp16=989.4 instead of fp8=1978.9).
         assert h200_row["peak_tflops_selected"] == pytest.approx(1978.9)
 
     def test_amd_tier_99_9_uses_fp8(self, spec_path):
@@ -612,8 +568,7 @@ class TestBuildTrainingDf:
         raw = pd.concat([raw, extra.to_frame().T], ignore_index=True)
         feat = build_training_df(raw, spec_path=spec_path)
         assert "future-model-1t" not in feat["benchmark_base"].values
-        # Guard against a catastrophic bug that drops ALL rows — an empty
-        # DataFrame would also satisfy the assertion above.
+        # Guard against a catastrophic bug that drops ALL rows — an empty DataFrame would also satisfy the assertion above.
         assert len(feat) == 2
 
     def test_rows_with_missing_gpu_specs_are_dropped(self, spec_path):
@@ -637,16 +592,10 @@ class TestBuildTrainingDf:
 
     def test_violation_rows_logged_not_dropped(self, spec_path, caplog):
         import logging
-        # A moderate efficiency_ratio > 1 (but within the (0, 1.2]
-        # bound) is kept, not dropped, AND a diagnostic warning is emitted —
-        # this is the expected AMD-FP8-precision-proxy-mismatch shape.
-        # (Extreme/NaN ratios outside (0, 1.2] ARE dropped — see
-        # test_extreme_efficiency_ratio_dropped / test_nan_efficiency_ratio_dropped
-        # below for that boundary.)
+        # A moderate efficiency_ratio > 1 (within (0, 1.2]) is kept, not dropped, and logs a warning — the expected AMD-FP8-precision-proxy-mismatch shape (extreme/NaN ratios outside the bound ARE dropped, see the tests below).
         raw = _make_raw_df(spec_path).copy()
         h200_mask = raw["gpu_name"] == "NVIDIA H200-SXM-141GB"
-        # roofline_tput for this fixture's H200 row is 14135.0 tok/s;
-        # 15548.5 = 1.1x, comfortably inside (1.0, 1.2].
+        # roofline_tput for this fixture's H200 row is 14135.0 tok/s; 15548.5 = 1.1x, comfortably inside (1.0, 1.2].
         raw.loc[h200_mask, "throughput_tok_per_sec_per_gpu"] = 15548.5
         with caplog.at_level(logging.WARNING, logger="src.features.build_features"):
             feat = build_training_df(raw, spec_path=spec_path)
@@ -662,12 +611,10 @@ class TestBuildTrainingDf:
 
     def test_extreme_efficiency_ratio_dropped(self, spec_path, caplog):
         import logging
-        # efficiency_ratio outside (0, 1.2] signals a spec-DB or
-        # parse error and must be dropped, not silently trained on.
+        # efficiency_ratio outside (0, 1.2] signals a spec-DB or parse error and must be dropped, not silently trained on.
         raw = _make_raw_df(spec_path).copy()
         h200_mask = raw["gpu_name"] == "NVIDIA H200-SXM-141GB"
-        # roofline_tput for this fixture's H200 row is 14135.0 tok/s;
-        # 18375.5 = 1.3x, past the 1.2 bound.
+        # roofline_tput for this fixture's H200 row is 14135.0 tok/s; 18375.5 = 1.3x, past the 1.2 bound.
         raw.loc[h200_mask, "throughput_tok_per_sec_per_gpu"] = 18375.5
         with caplog.at_level(logging.WARNING, logger="src.features.build_features"):
             feat = build_training_df(raw, spec_path=spec_path)
@@ -680,24 +627,7 @@ class TestBuildTrainingDf:
         ), "Expected a WARNING about efficiency_ratio outside (0, 1.2] but none was emitted"
 
     def test_nan_efficiency_ratio_dropped(self, spec_path):
-        # Regression test for a real defect: a
-        # SingleStream-scenario MLPerf row reports latency, not throughput,
-        # so throughput_tok_per_sec_per_gpu is NaN even though result_valid
-        # is True. Before this fix, the NaN silently reached efficiency_ratio
-        # (and the model's training target) with no drop and no warning tied
-        # to the NaN case specifically.
-        #
-        # NOTE (found 2026-07-12 mutation audit): this only proves the
-        # *observable behavior* (NaN throughput -> row dropped), not that
-        # valid_ratio's explicit `.notna()` term is what does it. NaN
-        # comparisons are always False under IEEE 754 (`float("nan") > 0` is
-        # False), so `(efficiency_ratio > 0)` alone already excludes NaN —
-        # `.notna()` is redundant with it for this specific input. Confirmed
-        # by mutation: removing `.notna()` from valid_ratio does not fail
-        # this test. `.notna()` is kept anyway for readability (matches this
-        # codebase's general preference for explicit conditions over relying
-        # on a reader knowing NaN-comparison semantics — see the comment on
-        # valid_ratio itself) — this test cannot and does not isolate it.
+        # Regression test: a SingleStream row reports latency not throughput, leaving throughput_tok_per_sec_per_gpu NaN despite result_valid=True, which must be dropped rather than silently reaching efficiency_ratio; mutation audit found this only proves NaN rows get dropped (via `efficiency_ratio > 0`, since NaN comparisons are always False) — `.notna()` is confirmed redundant here by mutation and kept only for readability, not isolated by this test.
         raw = _make_raw_df(spec_path).copy()
         h200_mask = raw["gpu_name"] == "NVIDIA H200-SXM-141GB"
         raw.loc[h200_mask, "throughput_tok_per_sec_per_gpu"] = float("nan")
@@ -707,8 +637,7 @@ class TestBuildTrainingDf:
         assert feat["efficiency_ratio"].notna().all()
 
     def test_zero_efficiency_ratio_dropped(self, spec_path):
-        # efficiency_ratio == 0 is outside the (0, 1.2] bound (open at
-        # the bottom) — a zero-throughput row is not valid training signal.
+        # efficiency_ratio == 0 is outside the (0, 1.2] bound (open at the bottom) — a zero-throughput row is not valid training signal.
         raw = _make_raw_df(spec_path).copy()
         h200_mask = raw["gpu_name"] == "NVIDIA H200-SXM-141GB"
         raw.loc[h200_mask, "throughput_tok_per_sec_per_gpu"] = 0.0
@@ -717,17 +646,10 @@ class TestBuildTrainingDf:
         assert feat["canonical_gpu_id"].iloc[0] == "mi300x"
 
     def test_efficiency_ratio_exactly_at_upper_bound_kept(self, spec_path):
-        # Found via mutation audit: no existing test pins the exact
-        # boundary — test_extreme_efficiency_ratio_dropped uses 1.3
-        # (comfortably past 1.2) and test_violation_rows_logged_not_dropped
-        # uses 1.1 (comfortably under it), so an off-by-one bound
-        # (`<` instead of `<=`, wrongly dropping a row at exactly 1.2) passed
-        # every prior test in this class. The bound is closed at the top
-        # ("(0, 1.2]") — a ratio of exactly 1.2 must be kept, not dropped.
+        # Found via mutation audit: no prior test pinned the exact boundary (1.3 and 1.1 both comfortably clear it), so an off-by-one (`<` instead of `<=`) wrongly dropping exactly 1.2 passed every test in this class; the bound is closed at the top, so exactly 1.2 must be kept.
         raw = _make_raw_df(spec_path).copy()
         h200_mask = raw["gpu_name"] == "NVIDIA H200-SXM-141GB"
-        # roofline_tput for this fixture's H200 row is 14135.0 tok/s;
-        # 16962.0 = 1.2x exactly.
+        # roofline_tput for this fixture's H200 row is 14135.0 tok/s; 16962.0 = 1.2x exactly.
         raw.loc[h200_mask, "throughput_tok_per_sec_per_gpu"] = 16962.0
         feat = build_training_df(raw, spec_path=spec_path)
         assert len(feat) == 2
