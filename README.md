@@ -70,6 +70,8 @@ MAPE and Spearman ρ measure point-prediction accuracy, not what the recommender
 
 Most of the misses (12 of 18) trace to one specific cause: MI300X and MI325X share the same CDNA3 compute die — MI325X is a memory-only upgrade (6.0 vs 5.3 TB/s HBM bandwidth, 256 vs 192 GB VRAM), so their physics-based roofline ceiling is identical. Real measurements show MI325X running ~30% faster than MI300X on `llama2-70b`, but the model under-weights that bandwidth-driven gap when generalizing to whichever of the two is held out, and repeatedly recommends the cheaper MI300X ($1.99/hr) over the faster MI325X ($2.50/hr) in budget-constrained scenarios — the wrong call. This is a specific, addressable limitation (the model needs better signal to distinguish two SKUs with identical compute but different memory bandwidth), not a general "AMD is unreliable" finding.
 
+**Recommendation diversity is lower than the "it depends on the workload" framing above implies.** Swept every feasible model × accuracy-tier combination through the recommender under all four ranking objectives (tokens/dollar, tokens/sec, tokens/watt, lowest cost per million tokens): `mi355x` is the #1 Pareto pick in 73–80% of queries, regardless of which objective is selected. It's not a ranking bug — mi355x measures as genuinely dominant on throughput, price, and power at its listed $4.50/hr — but it means the tool's answer is largely single-valued today rather than swinging between vendors by workload.
+
 ## Architecture
 
 ```
@@ -98,13 +100,14 @@ Key design principle borrowed from [NeuSight](https://arxiv.org/abs/2405.12031):
 ## Limitations
 
 - Prices are static (June 2026). Cloud spot/reserved pricing varies significantly.
-- MI355X predictions have higher variance (50 training rows, CDNA4 architecture with limited cross-GPU training signal).
+- All three AMD GPUs (MI300X: 80 rows, MI325X: 82, MI355X: 50) ship below this project's own 100-row-per-GPU reliability floor; MI355X is additionally single-round (v6.0 only, one benchmark family) with the highest resulting variance. Every prediction discloses this per-request (`training_data_tier: below_floor`) rather than being presented with the same confidence as H100/H200.
+- The self-run AMD calibration set (24 rows, MI300X, 2 precisions, 4 models) falls short of its own ≥50-row / ≥3-batch-size target — it has no batch-size variation.
 - Multi-GPU scaling, training-time workloads, and Blackwell/MI400 families are out of scope.
 - No live API calls — all inference is local to the Docker container.
 
 ## Tech stack
 
-Python · XGBoost · FastAPI · Streamlit · Docker · MLflow · SHAP
+Python · XGBoost · FastAPI · Streamlit · Docker · SHAP
 
 ---
 

@@ -120,7 +120,7 @@ This is the primary known limitation of the training corpus.
 | Step | Action | Status |
 |------|--------|--------|
 | 1 | Train with MI355X included; report MI355X MAPE separately; note in model card | Done |
-| 2 | Run MI300X + MI355X benchmarks on AMD Dev Cloud; add calibration rows | MI300X done (24 rows, 2026-07-07); MI355X not yet run — Dev Cloud access covers MI300X instances only |
+| 2 | Run MI300X + MI355X benchmarks on AMD Dev Cloud; add calibration rows | MI300X run 2026-07-07, but under its own ≥50-row / ≥3-LLM / ≥3-batch-size / 2-precision target: delivered 24 rows, 4 LLMs, 2 precisions, **zero batch-size variation**. Meets 2 of 4 axes. MI355X not yet run — Dev Cloud access covers MI300X instances only |
 | 3 | If MI355X row count ≥ 100 → keep `enabled: true`; else set `enabled: false` | Still blocked — MI355X remains at 50 rows |
 | 4 | Public writeup explicitly discloses the single-round limitation | Done (`README.md`) |
 | 5 | Until step 3's hard gate exists, disclose per-GPU data sufficiency in every API/UI response rather than presenting uniform confidence | Done — `training_data_tier` field (`none`/`below_floor`/`sufficient`), 2026-07-11. Interim measure; does not replace step 3. |
@@ -209,3 +209,4 @@ submitted to different MLPerf rounds.
 | KL-05 | No INVALID rows in current corpus | INVALID filter in training code is not currently exercised | Filter remains; future rounds may include INVALID |
 | KL-06 | MI355X CDNA4 spec values are estimated | Roofline ceilings for MI355X may be slightly off | Reconfirm against AMD MI350 whitepaper before finalizing training data |
 | KL-07 | `TOKENS_PER_SAMPLE` for llama3.1-405b inherits llama2-70b value | If Open ORCA output lengths differ across models, minor bias | Verify if llama3.1-405b round adds dataset-specific stats |
+| KL-08 | Recommendation diversity is low: `mi355x` is the #1 Pareto pick in 73–80% of feasible model×tier queries, under all 4 ranking objectives | Undercuts the "workload-dependent, don't always pick the same GPU" framing this data supports the recommender for | Not a data-quality defect — mi355x measures as genuinely dominant at its listed price. Re-verify the $4.50/hr price assumption and/or add further Pareto axes in a future pass |
