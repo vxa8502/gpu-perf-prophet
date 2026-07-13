@@ -81,8 +81,9 @@ MLPerf Inference v4.1–v6.0  →  Roofline model (physics ceiling)
                              →  FastAPI service  →  Streamlit UI
 ```
 
-Both processes run in the deployed container (`docker/entrypoint.sh`): FastAPI (`src/api/`)
-serves the roofline+XGBoost predictions and the Pareto recommender on an internal port, plus a
+Both processes run in the deployed container under `supervisord` (`docker/supervisord.conf`,
+restarts either process if it dies): FastAPI (`src/api/`) serves the roofline+XGBoost
+predictions and the Pareto recommender on an internal port, plus a
 `meta`/`request_id`/`GET /version`/rate-limiting/structured-access-log layer for provenance and
 basic abuse protection; Streamlit is the UI HF Spaces exposes publicly, and calls the API over
 HTTP (`app/api_client.py`) rather than importing the prediction/recommendation modules

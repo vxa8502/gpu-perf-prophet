@@ -19,6 +19,9 @@ pydantic==2.13.4
 # UI
 streamlit==1.59.1
 
+# Process supervision — restarts uvicorn if it dies mid-life (docker/supervisord.conf); no transitive deps
+supervisor==4.3.0
+
 # Pinned transitive dependencies (resolved, not hand-picked). nvidia-nccl-cu12 is deliberately NOT listed here: xgboost's Linux wheel unconditionally pulls it in (~300 MB, CPU use never needs it — tree_method="hist" only) but the Dockerfile installs it as an unavoidable resolver side effect and uninstalls it in the same layer so it never ships.
 altair==6.2.2
 annotated-doc==0.0.4

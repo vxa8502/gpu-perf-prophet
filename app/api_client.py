@@ -1,4 +1,4 @@
-"""Thin HTTP client the Streamlit UI uses to call the FastAPI service running alongside it in the same container (see docker/entrypoint.sh), instead of importing GpuPredictor/GpuRecommender and calling them in-process."""
+"""Thin HTTP client the Streamlit UI uses to call the FastAPI service running alongside it in the same container (see docker/supervisord.conf), instead of importing GpuPredictor/GpuRecommender and calling them in-process."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import requests
 
 API_BASE_URL = os.environ.get("GPP_API_BASE_URL", "http://127.0.0.1:8000")
 
-# The uvicorn sibling process (docker/entrypoint.sh) can still be starting when the first user interaction lands; retry connection errors only, never error *responses*, for up to ~5s.
+# The uvicorn sibling process (docker/supervisord.conf) can still be starting when the first user interaction lands; retry connection errors only, never error *responses*, for up to ~5s.
 _CONNECT_RETRIES = 10
 _CONNECT_RETRY_DELAY_S = 0.5
 _TIMEOUT_S = 15.0
