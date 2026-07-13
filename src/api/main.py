@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Request
@@ -37,7 +39,10 @@ _recommender: GpuRecommender | None = None
 _gpu_list: list[dict] | None = None
 _model_list: list[str] = sorted(VALID_MODELS)
 _gpu_spec_db_version: str = "unknown"
-_rate_limiter = RateLimiter()
+# state_path opts into surviving a supervisord crash-restart (docker/supervisord.conf) — without it, an autorestart silently resets every client's rate-limit history.
+_rate_limiter = RateLimiter(
+    state_path=Path(os.environ.get("GPP_RATE_LIMITER_STATE_PATH", "/tmp/gpp_rate_limiter_state.json"))
+)
 
 
 @asynccontextmanager
