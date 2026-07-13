@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-12T13:07:49.619349+00:00",
+  "generated_at": "2026-07-13T15:32:02.425400+00:00",
   "source_notebook": "notebooks/03_model_training.ipynb",
   "protocol": "LOGO-CV (Leave-One-GPU-Out); primary = in-scope folds (n>=10); official-only scoring where a fold mixes official MLPerf submissions with self-run calibration rows",
   "primary": {
