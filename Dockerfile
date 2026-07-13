@@ -25,6 +25,8 @@ COPY app/       app/
 COPY data/gpu_specs.yaml  data/gpu_specs.yaml
 COPY data/pricing.yaml    data/pricing.yaml
 COPY data/models/         data/models/
+COPY docker/entrypoint.sh entrypoint.sh
+RUN chmod +x entrypoint.sh
 
 # Transfer ownership before dropping privileges.
 RUN chown -R appuser /app
@@ -34,11 +36,8 @@ USER appuser
 # HF Spaces expects the app to listen on port 7860
 ENV PORT=7860
 
-# Expose both ports: Streamlit (7860) and FastAPI (8000)
+# Streamlit (7860, HF Spaces' externally-routed port) and FastAPI (8000, internal — Streamlit's only client, see app/api_client.py) both run in this container; entrypoint.sh starts uvicorn in the background and execs streamlit in the foreground, so every UI interaction is real API traffic rather than an in-process call.
 EXPOSE 7860
 EXPOSE 8000
 
-# Default: run Streamlit UI; override CMD with `uvicorn src.api.main:app --host 0.0.0.0 --port 8000` to run FastAPI instead.
-CMD ["streamlit", "run", "app/streamlit_app.py", \
-     "--server.port=7860", "--server.address=0.0.0.0", \
-     "--server.headless=true", "--browser.gatherUsageStats=false"]
+CMD ["./entrypoint.sh"]

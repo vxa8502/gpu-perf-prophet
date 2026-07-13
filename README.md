@@ -76,14 +76,15 @@ Most of the misses (12 of 18) trace to one specific cause: MI300X and MI325X sha
 MLPerf Inference v4.1–v6.0  →  Roofline model (physics ceiling)
                              →  XGBoost efficiency-gap correction (20 features)
                              →  Multi-objective Pareto recommender
-                             →  Streamlit UI (default) or FastAPI (optional)
+                             →  FastAPI service  →  Streamlit UI
 ```
 
-The deployed app runs Streamlit only by default — it imports the prediction and
-recommendation modules directly in-process rather than calling an HTTP API. A separate,
-fully tested FastAPI service (`src/api/`) exposes the same logic over `/predict` and
-`/recommend` for programmatic access; it's not started by default (override the Docker
-`CMD` to run it — see `Dockerfile`).
+Both processes run in the deployed container (`docker/entrypoint.sh`): FastAPI (`src/api/`)
+serves the roofline+XGBoost predictions and the Pareto recommender on an internal port, plus a
+`meta`/`request_id`/`GET /version`/rate-limiting/structured-access-log layer for provenance and
+basic abuse protection; Streamlit is the UI HF Spaces exposes publicly, and calls the API over
+HTTP (`app/api_client.py`) rather than importing the prediction/recommendation modules
+in-process — so every UI interaction is real, observable API traffic, not a bypass of it.
 
 Key design principle borrowed from [NeuSight](https://arxiv.org/abs/2405.12031): physics-bounded ML generalizes to unseen GPUs; pure ML fails.
 

@@ -11,6 +11,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 import pandas as pd
 import streamlit as st
 
+from api_client import ApiError, ApiUnavailableError, recommend as api_recommend
+
 from src.features.build_features import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_INPUT_TOKENS,
@@ -22,8 +24,7 @@ from src.features.build_features import (
     MIN_OUTPUT_TOKENS,
     MAX_OUTPUT_TOKENS,
 )
-from src.models.predictor import GpuPredictor, VALID_MODELS
-from src.recommend.recommender import GpuRecommender
+from src.models.predictor import VALID_MODELS
 
 _SORTED_MODELS: list[str] = sorted(VALID_MODELS)
 
@@ -47,17 +48,6 @@ st.caption(
     "Cross-vendor LLM inference forecasting · AMD Instinct + NVIDIA · "
     "Powered by roofline physics + XGBoost"
 )
-
-# Load model (cached so it runs only once)
-
-@st.cache_resource(show_spinner="Loading model …")
-def _load() -> tuple[GpuPredictor, GpuRecommender]:
-    pred = GpuPredictor()
-    rec  = GpuRecommender(pred)
-    return pred, rec
-
-
-predictor, recommender = _load()
 
 # Sidebar — workload inputs
 
@@ -131,18 +121,31 @@ if not run_btn:
     st.stop()
 
 with st.spinner("Running predictions …"):
-    result = recommender.recommend(
-        model_name=model_name,
-        scenario=scenario,
-        accuracy_tier=accuracy_tier,
-        framework=framework,
-        batch_size=batch_size,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        budget_per_gpu_hr=budget if budget > 0 else None,
-        min_throughput_tok_per_sec=min_tput if min_tput > 0 else None,
-        ranking_objective=ranking_objective,
-    )
+    try:
+        result = api_recommend(
+            model_name=model_name,
+            scenario=scenario,
+            accuracy_tier=accuracy_tier,
+            framework=framework,
+            batch_size=batch_size,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            budget_per_gpu_hr=budget if budget > 0 else None,
+            min_throughput_tok_per_sec=min_tput if min_tput > 0 else None,
+            ranking_objective=ranking_objective,
+        )
+    except ApiUnavailableError:
+        st.error(
+            "The prediction API is still starting up — this can take a few seconds "
+            "right after a fresh deploy. Please try again."
+        )
+        st.stop()
+    except ApiError as exc:
+        if exc.status_code == 429:
+            st.error("Rate limit exceeded — please wait a moment and try again.")
+        else:
+            st.error(f"Request rejected ({exc.status_code}): {exc.detail}")
+        st.stop()
 
 workload = result["workload"]
 frontier = result["frontier"]
@@ -170,6 +173,13 @@ _ALL_CANDIDATES = frontier + dominated
 
 if not _ALL_CANDIDATES:
     st.warning("No GPUs passed the hard constraints (VRAM fit / budget / throughput).")
+    infeasibility = result.get("infeasibility")
+    if infeasibility:
+        st.info(infeasibility["message"])
+        if infeasibility["relaxable"]:
+            st.markdown("**Try relaxing:**")
+            for hint in infeasibility["relaxable"]:
+                st.markdown(f"- {hint}")
     if filtered:
         st.subheader("Filtered GPUs")
         fdf = pd.DataFrame([
@@ -192,16 +202,16 @@ st.caption(
 )
 
 _MEMORY_FIT_LABELS = {
-    "fits": "✓ fits",
-    "tight": "⚠ tight",
-    "does_not_fit": "✗ does not fit",
+    "fits": "fits",
+    "tight": "tight",
+    "does_not_fit": "does not fit",
 }
 
-# "below_floor" gets its own amber signal rather than folding into "✓ measured" — real data, but short of this project's 100-row-per-GPU reliability floor that a bare boolean previously hid.
+# "below_floor" is its own label rather than folding into "measured" — real data, but short of this project's 100-row-per-GPU reliability floor that a bare boolean previously hid.
 _TRAINING_DATA_LABELS = {
-    "sufficient": "✓ measured",
-    "below_floor": "⚠ limited data",
-    "none": "✗ unmeasured",
+    "sufficient": "measured",
+    "below_floor": "limited data",
+    "none": "unmeasured",
 }
 
 
@@ -238,8 +248,8 @@ if frontier:
         hide_index=True,
     )
 
-    # Highlight the top pick
-    top = frontier[0]
+    # Highlight the top pick (the API's own top_recommendation — equal to frontier[0], but read from the response rather than recomputed locally).
+    top = result["top_recommendation"]
     st.success(
         f"**Top pick: {top['gpu_name']}** (ranked by {ranking_label.lower()}) — "
         f"{top['pred_throughput_tok_per_sec']:,.0f} tok/s · "
@@ -250,21 +260,21 @@ if frontier:
     )
     if top["training_data_tier"] == "none":
         st.warning(
-            f"⚠ **{top['gpu_name']} has no real measured data in this model's training set.** "
+            f"**{top['gpu_name']} has no real measured data in this model's training set.** "
             "This prediction is extrapolated from other GPUs' specs, not validated against "
             "an actual benchmark for this SKU — treat it as a rough estimate, not a "
             "measured number."
         )
     elif top["training_data_tier"] == "below_floor":
         st.warning(
-            f"⚠ **{top['gpu_name']} has limited measured data** — real benchmark rows went "
+            f"**{top['gpu_name']} has limited measured data** — real benchmark rows went "
             "into training, but fewer than this project's own 100-row-per-GPU reliability "
             "target. Treat the prediction as directionally useful, not as confidently "
             "measured as GPUs with more training data."
         )
     if top["memory_fit_verdict"] == "tight":
         st.warning(
-            f"⚠ **{top['gpu_name']} is a tight memory fit** — weights + KV cache + 10% "
+            f"**{top['gpu_name']} is a tight memory fit** — weights + KV cache + 10% "
             f"overhead use {top['vram_utilization']:.0%} of its {top['vram_gb']:.0f} GB VRAM "
             "at this batch size/context length. Expected to run, but with little headroom "
             "for allocator fragmentation; consider a smaller batch or a bigger GPU."
@@ -326,3 +336,13 @@ st.caption(
     "Prices are static estimates (June 2026). AMD MAPE ≈ 25%, NVIDIA MAPE ≈ 21% — use for "
     "ranking, not precise capacity planning."
 )
+
+# Response provenance — reachable because this UI calls the API instead of importing the predictor/recommender in-process.
+meta = result.get("meta")
+if meta:
+    st.caption(
+        f"Model `{meta['model_artifact_version']}` · "
+        f"GPU spec DB `{meta['gpu_spec_db_version']}` · "
+        f"Pricing as of `{meta['pricing_snapshot_date']}` · "
+        f"Request `{meta['request_id']}`"
+    )
