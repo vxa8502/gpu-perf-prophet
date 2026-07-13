@@ -1,32 +1,4 @@
-##############################################################################
-# GPU Perf Prophet — GPU Specification Database
-# schema_version: "1.0"
-#
-# Accuracy policy
-# ───────────────
-# spec_confidence: "verified"   → from vendor spec sheet / whitepaper
-#                  "estimated"  → derived from architecture docs or cross-refs;
-#                                 verify before Phase-2 training freeze
-#
-# peak_tflops are DENSE (no structured sparsity), a deliberate design choice.
-# AMD "compute" throughput uses MFMA instruction peak.
-# NVIDIA "compute" throughput uses Tensor Core peak for BF16/FP16/FP8;
-#   fp32 is scalar CUDA-core throughput.
-# hbm_bandwidth_tbps is peak theoretical from memory specification.
-# ~ (null) means not supported natively on that GPU.
-#
-# in_model_scope
-# ──────────────
-# true  → GPU is a Phase-1 recommendation target
-# false → GPU appears in the training corpus but is not exposed to users v1
-#         (Blackwell family, edge GPUs, GPU combos without clean single-SKU rows)
-#
-# aliases
-# ───────
-# Every unique accelerator_model_name string that appeared in MLPerf
-# v4.1–v6.0 system JSONs for this GPU, including case variants and
-# suffix variants without the count specifier "(xN)".
-##############################################################################
+# GPU Perf Prophet GPU spec database (schema_version 1.0). spec_confidence: verified = vendor spec sheet/whitepaper, estimated = derived from architecture docs/cross-refs. peak_tflops are DENSE (no structured sparsity); AMD uses MFMA instruction peak, NVIDIA uses Tensor Core peak for BF16/FP16/FP8 and scalar CUDA-core for FP32; hbm_bandwidth_tbps is peak theoretical; ~ (null) means unsupported on that GPU. in_model_scope true = exposed as a v1 recommendation target, false = in the training corpus only (Blackwell family, edge GPUs, multi-SKU combos). aliases = every unique accelerator_model_name seen in MLPerf v4.1–v6.0 system JSONs for this GPU, incl. case/suffix variants without the "(xN)" count specifier.
 
 schema_version: "1.0"
 
@@ -304,9 +276,7 @@ gpus:
     aliases:
       - "NVIDIA GH200 Grace Hopper Superchip 144GB"
 
-  # ── NVIDIA Ampere ──────────────────────────────────────────────────────
-  # A100 has zero LLM rows in v4.1–v6.0 corpus; specs kept for the
-  # recommendation engine (roofline-only fallback for unseen GPUs).
+  # NVIDIA Ampere — A100 has zero LLM rows in v4.1–v6.0 corpus; specs kept for the recommender's roofline-only fallback.
 
   - id: a100_sxm_80gb
     name: "NVIDIA A100 SXM4 80GB"
@@ -333,8 +303,7 @@ gpus:
       - "NVIDIA A100-SXM-80GB"
       - "NVIDIA A100 80GB"
 
-  # ── NVIDIA Ada Lovelace ────────────────────────────────────────────────
-  # L4 and RTX 4090 have zero LLM rows in corpus; included for recommender.
+  # NVIDIA Ada Lovelace — L4 and RTX 4090 have zero LLM rows in corpus; included for recommender.
 
   - id: l4
     name: "NVIDIA L4"
@@ -407,9 +376,7 @@ gpus:
       - "NVIDIA GeForce RTX 4090"
       - "NVIDIA RTX 4090"
 
-  # ── NVIDIA Blackwell — out of v1 scope; included for training signal ──
-  # Rows exist in corpus; having roofline bounds enables the model to train
-  # on them.  They are never surfaced as recommendations in v1.
+  # NVIDIA Blackwell — out of v1 scope; roofline bounds let the model train on corpus rows without ever surfacing them as recommendations.
 
   - id: b200_sxm
     name: "NVIDIA B200 SXM"
@@ -457,9 +424,7 @@ gpus:
     aliases:
       - "NVIDIA B300-SXM-270GB"
 
-  # GB200 NVL module = 2× B200 GPU dies + 2× Grace CPUs.
-  # Per-module specs listed here; num_gpus normalization treats the module
-  # as the unit (matching how MLPerf system JSONs report accelerators_per_node).
+  # GB200 NVL module = 2x B200 GPU dies + 2x Grace CPUs; specs are per-module, and num_gpus normalization treats the module as the unit (matching MLPerf's accelerators_per_node reporting).
   - id: gb200
     name: "NVIDIA GB200 NVL"
     vendor: nvidia

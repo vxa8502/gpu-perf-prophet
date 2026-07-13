@@ -1,13 +1,4 @@
-# Testing-only dependencies — never installed into the Docker image (see
-# Dockerfile: only requirements.txt is COPY'd/installed there). Neither
-# pytest nor httpx is imported by anything under src/ or app/ (confirmed by
-# grep 2026-07-11); FastAPI's TestClient pulls in httpx only for tests.
-#
-# Install alongside requirements.txt for local development:
-#   pip install -r requirements.txt -r requirements-dev.txt
-#
-# Pinned the same way as requirements.txt — resolved 2026-07-11
-# against python:3.11-slim with requirements.txt already installed.
+# Testing-only deps, never installed into the Docker image (neither pytest nor httpx is imported under src/ or app/). Install alongside for local dev: `pip install -r requirements.txt -r requirements-dev.txt`. Pinned the same way as requirements.txt, resolved 2026-07-11 against python:3.11-slim with requirements.txt already installed.
 pytest==9.1.1
 pytest-cov==7.1.0
 httpx==0.28.1           # required by FastAPI TestClient (starlette.testclient)

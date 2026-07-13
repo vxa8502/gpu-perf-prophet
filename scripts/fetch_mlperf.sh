@@ -1,18 +1,5 @@
 #!/usr/bin/env bash
-# Sparse-clone MLPerf Inference results repos for GPU Perf Prophet.
-#
-# Fetches only the files the parser needs from each round:
-#   closed/*/systems/*.json              (GPU hardware descriptions)
-#   closed/*/results/**/mlperf_log_summary.txt  (performance logs)
-#
-# Repos are placed under data/raw/mlperf/<version>/.
-# Full clones of these repos can exceed several GB; sparse checkout
-# keeps each round under ~50 MB.
-#
-# Usage:
-#   bash scripts/fetch_mlperf.sh              # all four rounds
-#   bash scripts/fetch_mlperf.sh v6.0         # single round
-#   ROUNDS="v5.1 v6.0" bash scripts/fetch_mlperf.sh
+# Sparse-clones MLPerf Inference results repos into data/raw/mlperf/<version>/, fetching only closed/*/systems/*.json and closed/*/results/**/mlperf_log_summary.txt — keeps each round under ~50 MB vs several GB for a full clone. Usage: `bash scripts/fetch_mlperf.sh` (all rounds), `bash scripts/fetch_mlperf.sh v6.0` (one round), or `ROUNDS="v5.1 v6.0" bash scripts/fetch_mlperf.sh`.
 
 set -euo pipefail
 
@@ -28,8 +15,7 @@ fi
 mkdir -p "$DEST"
 
 for ROUND in $ROUNDS; do
-    # Validate before using $ROUND in path or URL construction.
-    # Accepts only the form vN.N (e.g. v6.0) to prevent path traversal.
+    # Validate before using $ROUND in path/URL construction — only vN.N (e.g. v6.0) accepted, to prevent path traversal.
     if ! [[ "$ROUND" =~ ^v[0-9]+\.[0-9]+$ ]]; then
         echo "Error: invalid round tag '${ROUND}' — expected vN.N (e.g. v6.0)" >&2
         exit 1
@@ -55,10 +41,7 @@ for ROUND in $ROUNDS; do
 
     pushd "$TARGET" > /dev/null
 
-    # Fetch only the paths the parser needs.
-    # --no-cone: use gitignore-style patterns so * wildcards are accepted.
-    # (default cone mode rejects wildcards with "specify directories rather
-    # than patterns")
+    # Fetch only the paths the parser needs; --no-cone allows gitignore-style * wildcards (default cone mode rejects them).
     git sparse-checkout set --no-cone \
         "closed/*/systems" \
         "closed/*/results/*/llama2-70b/*/performance" \

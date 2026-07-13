@@ -1,21 +1,4 @@
-##############################################################################
-# GPU Perf Prophet — Static Cloud GPU Pricing
-#
-# source_date: 2026-06-17
-# Policy: static snapshot — no live API calls. Prices are per-GPU per-hour
-#         on a single on-demand instance. Costs vary by cloud provider,
-#         region, and contract term; these are representative on-demand
-#         rates for planning purposes only.
-#
-# Sources (June 2026):
-#   AMD Developer Cloud (amd.com/en/developer/resources/cloud-access.html)
-#   Lambda Labs (lambdalabs.com/service/gpu-cloud)
-#   Vast.ai / RunPod community rates (runpod.io/gpu-instance/pricing)
-#   getdeploying.com/gpus/amd-mi355x (multi-provider comparison)
-#
-# price_per_gpu_hr: USD, on-demand, single GPU, no reserved/spot discount
-# source: human-readable provenance note
-##############################################################################
+# GPU Perf Prophet static cloud GPU pricing (source_date 2026-06-17): a static snapshot, no live API calls — price_per_gpu_hr is USD, on-demand, single GPU, no reserved/spot discount, representative rate only (varies by provider/region/term). Sources (June 2026): AMD Developer Cloud, Lambda Labs, Vast.ai/RunPod community rates, getdeploying.com/gpus/amd-mi355x.
 
 pricing:
 

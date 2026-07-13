@@ -1,33 +1,12 @@
-# Production runtime dependencies only — see requirements-dev.txt for
-# testing tools (pytest/pytest-cov/httpx), which must not ship in the
-# deployed Docker image.
-#
-# Pinned exact versions so the build is bit-reproducible within
-# Python wheel architecture constraints. Includes the full resolved
-# dependency closure, not just the direct/top-level packages, since an
-# unpinned transitive dependency can still change what actually gets
-# installed on a fresh build even with every direct package pinned.
-# Resolved 2026-07-11 against python:3.11-slim (this project's actual
-# Docker base image — see Dockerfile) via:
-#   docker run --rm -v "$(pwd)/requirements-runtime.in:/tmp/req.in:ro" \
-#       python:3.11-slim bash -c \
-#       "pip install -r /tmp/req.in && pip uninstall -y nvidia-nccl-cu12 && pip freeze"
-# Regenerate this file the same way after bumping any direct pin below.
+# Production runtime deps only (see requirements-dev.txt for pytest/pytest-cov/httpx, which must not ship). Pinned exact versions incl. the full resolved transitive closure (not just direct packages) for bit-reproducible builds; resolved 2026-07-11 against python:3.11-slim via `docker run --rm -v "$(pwd)/requirements-runtime.in:/tmp/req.in:ro" python:3.11-slim bash -c "pip install -r /tmp/req.in && pip uninstall -y nvidia-nccl-cu12 && pip freeze"` — regenerate the same way after bumping any direct pin below.
 
-# ── Direct/top-level dependencies ────────────────────────────────────────────
-# Data processing
+# Direct/top-level dependencies — data processing
 pandas==3.0.3
 numpy==2.4.6
 pyarrow==25.0.0        # Parquet I/O
 PyYAML==6.0.3           # GPU/LLM spec databases
 
-# ML
-# lightgbm/optuna/mlflow were originally planned but never wired into any
-# training/serving code path (XGBoost was the model-family choice; no
-# Optuna tuning or MLflow tracking was ever built).
-# Removed 2026-07-11 after confirming zero imports anywhere in
-# src/, notebooks/, tests/, benchmarks/ — they were dead weight in the
-# Docker image, not a functional gap.
+# ML — lightgbm/optuna/mlflow were planned but never wired in (XGBoost was the model choice); removed 2026-07-11 after confirming zero imports anywhere in src/, notebooks/, tests/, benchmarks/.
 scikit-learn==1.9.0
 xgboost==3.2.0
 shap==0.51.0
@@ -40,16 +19,7 @@ pydantic==2.13.4
 # UI
 streamlit==1.59.1
 
-# ── Pinned transitive dependencies (resolved, not hand-picked) ──────────────
-# xgboost's Linux wheel unconditionally declares
-# `nvidia-nccl-cu12; platform_system == "Linux"` — a ~300 MB CUDA
-# multi-GPU communication library — even for pure single-node CPU use
-# (this project only ever calls tree_method="hist"). Confirmed CPU
-# train/predict/save/load all work identically without it (found while
-# investigating a Docker image-size failure). Deliberately NOT
-# pinned/listed here — the Dockerfile installs it as an unavoidable
-# resolver side effect and immediately uninstalls it in the same layer so
-# it never persists into the shipped image.
+# Pinned transitive dependencies (resolved, not hand-picked). nvidia-nccl-cu12 is deliberately NOT listed here: xgboost's Linux wheel unconditionally pulls it in (~300 MB, CPU use never needs it — tree_method="hist" only) but the Dockerfile installs it as an unavoidable resolver side effect and uninstalls it in the same layer so it never ships.
 altair==6.2.2
 annotated-doc==0.0.4
 annotated-types==0.7.0
