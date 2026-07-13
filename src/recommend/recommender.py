@@ -38,7 +38,8 @@ _DEFAULT_PRICING_PATH = Path(__file__).parent.parent.parent / "data" / "pricing.
 _MAX_PRICING_BYTES: int = 1 * 1024 * 1024  # 1 MB
 
 
-def _load_pricing(path: Path) -> dict[str, float]:
+def _load_pricing(path: Path) -> tuple[dict[str, float], Optional[str]]:
+    """Return (gpu_id -> price_per_gpu_hr, source_date). source_date is the pricing snapshot date (meta.pricing_snapshot_date) — None for a pricing.yaml predating that key rather than a hard failure, since pricing itself still loads fine without it."""
     # Mirror gpu_spec_db.load_specs' symlink/size guards so the pricing file can't be swapped out via a filesystem symlink.
     try:
         st = path.lstat()
@@ -61,7 +62,7 @@ def _load_pricing(path: Path) -> dict[str, float]:
                 f"pricing.yaml entry {gpu_id!r} is missing 'price_per_gpu_hr' key"
             )
         result[gpu_id] = entry["price_per_gpu_hr"]
-    return result
+    return result, data.get("source_date")
 
 
 # ranking_objective name -> (candidate dict field, higher_is_better); lowest_cost_per_million_tokens is the one ascending (lower-is-better) case.
@@ -151,7 +152,7 @@ class GpuRecommender:
         pricing_path: Path | str = _DEFAULT_PRICING_PATH,
     ) -> None:
         self._predictor = predictor
-        self._pricing = _load_pricing(Path(pricing_path))
+        self._pricing, self._pricing_source_date = _load_pricing(Path(pricing_path))
 
         specs = load_specs()
         self._in_scope_ids: list[str] = [
@@ -172,6 +173,10 @@ class GpuRecommender:
             "GpuRecommender ready: %d in-scope GPUs, %d pricing entries",
             len(self._in_scope_ids), len(self._pricing),
         )
+
+    @property
+    def pricing_source_date(self) -> Optional[str]:
+        return self._pricing_source_date
 
     # Public API
 

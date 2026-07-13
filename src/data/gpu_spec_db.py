@@ -59,8 +59,8 @@ def _build_spec_cache(spec_path_str: str) -> tuple[list, dict, dict]:
 
 
 @functools.lru_cache(maxsize=8)
-def load_specs(spec_path: Path | str = _DEFAULT_SPEC_PATH) -> list[dict]:
-    """Load the GPU spec dict list from YAML; raises ValueError for symlinks, oversized files, or a missing 'gpus' key."""
+def _load_raw(spec_path: Path | str = _DEFAULT_SPEC_PATH) -> dict:
+    """Guarded, cached parse of the full gpu_specs.yaml dict (not just the 'gpus' list) — the one place this file is actually opened and yaml.safe_load'd. load_specs() and spec_db_version() both build on this so the same ~10 KB file isn't parsed twice for two different facts about it."""
     path = Path(spec_path)
     try:
         st = path.lstat()
@@ -79,7 +79,19 @@ def load_specs(spec_path: Path | str = _DEFAULT_SPEC_PATH) -> list[dict]:
             f"GPU spec DB at {path} is missing required 'gpus' key "
             f"(got {type(data).__name__})"
         )
-    return data["gpus"]
+    return data
+
+
+@functools.lru_cache(maxsize=8)
+def load_specs(spec_path: Path | str = _DEFAULT_SPEC_PATH) -> list[dict]:
+    """Load the GPU spec dict list from YAML; raises ValueError for symlinks, oversized files, or a missing 'gpus' key."""
+    return _load_raw(spec_path)["gpus"]
+
+
+@functools.lru_cache(maxsize=8)
+def spec_db_version(spec_path: Path | str = _DEFAULT_SPEC_PATH) -> str:
+    """The gpu_specs.yaml schema_version string (meta.gpu_spec_db_version)."""
+    return str(_load_raw(spec_path).get("schema_version", "unknown"))
 
 
 def _build_alias_index(specs: list[dict]) -> dict[str, dict]:

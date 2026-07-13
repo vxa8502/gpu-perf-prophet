@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import stat as _stat
@@ -227,6 +228,10 @@ class GpuPredictor:
         self._model = xgb.XGBRegressor()
         self._model.load_model(str(model_path))
 
+        # meta.model_artifact_sha256: hash of the actual model file bytes, distinct from feature_metadata.json's corpus_sha256 (hash of the *training data*) — this one changes iff the artifact itself changes.
+        self._model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
+        self._model_version: str = self._meta.get("model_version", "unknown")
+
         # GPUs with zero training rows extrapolate purely from specs; required key (not .get()) so an old feature_metadata.json predating this field fails loudly rather than silently reporting every GPU as having real training data.
         if "trained_gpu_ids" not in self._meta:
             raise ValueError(
@@ -251,6 +256,14 @@ class GpuPredictor:
         )
 
     # ---- Public API ----
+
+    @property
+    def model_artifact_sha256(self) -> str:
+        return self._model_sha256
+
+    @property
+    def model_version(self) -> str:
+        return self._model_version
 
     def training_data_tier(self, gpu_id: str) -> str:
         """Where gpu_id's training-row count sits relative to the reliability floor: "none" (zero real rows, pure spec extrapolation), "below_floor" (nonzero but under MIN_TRAINING_ROWS_PER_GPU=100; see the module-level comment on that constant for why v1 ships these anyway), or "sufficient" (meets or exceeds the 100-row floor)."""

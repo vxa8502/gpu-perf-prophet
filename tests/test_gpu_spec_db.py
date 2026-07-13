@@ -11,10 +11,12 @@ from src.data.gpu_spec_db import (
     SPEC_COLUMNS,
     _build_alias_index,
     _is_heterogeneous,
+    _load_raw,
     _strip_suffixes,
     enrich_df,
     load_specs,
     normalize_gpu_name,
+    spec_db_version,
 )
 
 
@@ -181,6 +183,47 @@ class TestLoadSpecsSecurity:
         p = self._minimal_yaml(tmp_path, {"gpus": [{"id": "test"}]})
         result = load_specs(p)
         assert result == [{"id": "test"}]
+
+
+class TestSpecDbVersion:
+    def _minimal_yaml(self, tmp_path, content: dict) -> Path:
+        p = tmp_path / "specs.yaml"
+        p.write_text(yaml.dump(content), encoding="utf-8")
+        return p
+
+    def test_reads_schema_version(self, tmp_path):
+        p = self._minimal_yaml(tmp_path, {"schema_version": "2.3", "gpus": []})
+        assert spec_db_version(p) == "2.3"
+
+    def test_missing_schema_version_defaults_to_unknown(self, tmp_path):
+        p = self._minimal_yaml(tmp_path, {"gpus": []})
+        assert spec_db_version(p) == "unknown"
+
+    def test_shares_guards_with_load_specs(self, tmp_path):
+        # spec_db_version() must fail the same way load_specs() does for a bad file — both delegate to the same guarded _load_raw() now, not two independent guard copies.
+        p = tmp_path / "huge.yaml"
+        p.write_bytes(b"# " + b"x" * _MAX_SPEC_BYTES)
+        with pytest.raises(ValueError, match="too large"):
+            spec_db_version(p)
+
+    def test_load_specs_and_spec_db_version_parse_the_file_only_once(self, tmp_path, monkeypatch):
+        # Regression guard: spec_db_version() used to run its own independent yaml.safe_load of the same file load_specs() already parsed (~15ms wasted per cold start); both now build on the same lru_cache'd _load_raw(), so yaml.safe_load must be called exactly once for one path across both public functions.
+        p = self._minimal_yaml(tmp_path, {"schema_version": "9.9", "gpus": [{"id": "x"}]})
+        _load_raw.cache_clear()
+
+        calls = []
+        real_safe_load = yaml.safe_load
+
+        def counting_safe_load(stream):
+            calls.append(1)
+            return real_safe_load(stream)
+
+        monkeypatch.setattr(yaml, "safe_load", counting_safe_load)
+
+        assert load_specs(p) == [{"id": "x"}]
+        assert spec_db_version(p) == "9.9"
+        assert load_specs(p) == [{"id": "x"}]
+        assert len(calls) == 1
 
 
 class TestLogInjection:

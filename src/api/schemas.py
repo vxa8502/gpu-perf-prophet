@@ -20,6 +20,23 @@ RankingObjective = Literal[
 ]
 
 
+class MetaOut(BaseModel):
+    """Per-request provenance: what code+data actually produced this response, so a caller can tell whether two responses are comparable."""
+    request_id:                str
+    model_artifact_version:    str
+    model_artifact_sha256:     str
+    pricing_snapshot_date:     Optional[str]
+    gpu_spec_db_version:       str
+
+
+class VersionOut(BaseModel):
+    """GET /version: same provenance fields as MetaOut, without a per-request request_id."""
+    model_artifact_version:    str
+    model_artifact_sha256:     str
+    pricing_snapshot_date:     Optional[str]
+    gpu_spec_db_version:       str
+
+
 class PredictRequest(BaseModel):
     gpu_id:        str          = Field(..., max_length=100, examples=["mi300x"])
     model_name:    str          = Field(..., max_length=100, examples=["llama2-70b"])
@@ -59,6 +76,7 @@ class PredictResponse(BaseModel):
                      "'below_floor' GPUs have real data but less than 'sufficient' ones."
     )
     training_data_tier:            TrainingDataTier
+    meta:                           Optional[MetaOut] = None
 
 
 class RecommendRequest(BaseModel):
@@ -156,3 +174,4 @@ class RecommendResponse(BaseModel):
     dominated: list[GpuResult]
     filtered:  list[FilteredGpuResult]
     workload:  WorkloadSummary
+    meta: Optional[MetaOut] = None

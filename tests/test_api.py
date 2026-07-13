@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from src.api.main import app
+from src.api.middleware import RateLimiter
+
+_REPO_ROOT = Path(__file__).parent.parent
 
 
 @pytest.fixture(scope="module")
@@ -61,6 +69,99 @@ class TestListModels:
         assert r.status_code == 200
         # Compare the complete set — spot-checking 2 models misses regressions that remove other models (e.g. mixtral-8x7b, llama3.1-405b).
         assert set(r.json()["models"]) == VALID_MODELS
+
+
+# GET /version
+
+class TestVersion:
+    def test_returns_provenance_fields(self, client):
+        # Each expected value is independently recomputed from the raw source file — not imported from src.models.predictor/src.data.gpu_spec_db/src.recommend.recommender — so this fails if any of those computations silently drift, not just if the field goes missing.
+        r = client.get("/version")
+        assert r.status_code == 200
+        body = r.json()
+
+        model_bytes = (_REPO_ROOT / "data" / "models" / "prophet_v1.json").read_bytes()
+        assert body["model_artifact_sha256"] == hashlib.sha256(model_bytes).hexdigest()
+
+        meta = json.loads((_REPO_ROOT / "data" / "models" / "feature_metadata.json").read_text())
+        assert body["model_artifact_version"] == meta["model_version"]
+
+        specs = yaml.safe_load((_REPO_ROOT / "data" / "gpu_specs.yaml").read_text())
+        assert body["gpu_spec_db_version"] == str(specs["schema_version"])
+
+        pricing = yaml.safe_load((_REPO_ROOT / "data" / "pricing.yaml").read_text())
+        assert body["pricing_snapshot_date"] == pricing["source_date"]
+
+
+# Observability middleware (request-id, access log, rate limit)
+
+class TestObservability:
+    def test_request_id_header_present_and_unique(self, client):
+        r1 = client.get("/health")
+        r2 = client.get("/health")
+        assert "x-request-id" in r1.headers
+        assert r1.headers["x-request-id"] != r2.headers["x-request-id"]
+
+    def test_meta_block_on_predict(self, client):
+        r = client.post("/predict", json={
+            "gpu_id": "h100_sxm",
+            "model_name": "llama2-70b",
+            "accuracy_tier": "99",
+        })
+        assert r.status_code == 200
+        meta = r.json()["meta"]
+        assert meta["request_id"] == r.headers["x-request-id"]
+        assert meta["model_artifact_sha256"]
+        assert meta["gpu_spec_db_version"]
+
+    def test_meta_block_on_recommend(self, client):
+        r = client.post("/recommend", json={"model_name": "llama2-70b", "accuracy_tier": "99"})
+        assert r.status_code == 200
+        meta = r.json()["meta"]
+        assert meta["request_id"] == r.headers["x-request-id"]
+
+    def test_meta_matches_version_provenance(self, client):
+        # /version and every response's meta block draw their 4 provenance fields from one shared helper (_provenance_fields) rather than two independently-maintained copies.
+        version = client.get("/version").json()
+        meta = client.post("/predict", json={
+            "gpu_id": "h100_sxm",
+            "model_name": "llama2-70b",
+            "accuracy_tier": "99",
+        }).json()["meta"]
+        for key in version:
+            assert meta[key] == version[key], f"{key}: meta={meta[key]!r} version={version[key]!r}"
+
+    def test_meta_present_on_value_error_422(self, client):
+        # A ValueError raised from inside predict()/recommend() (after the predictor is already loaded) becomes a 422 via `except ValueError -> HTTPException(422, ...)` — this response must still carry meta, unlike a Pydantic-level RequestValidationError (a different exception type, not covered).
+        r = client.post("/predict", json={
+            "gpu_id": "not-a-real-gpu",
+            "model_name": "llama2-70b",
+            "accuracy_tier": "99",
+        })
+        assert r.status_code == 422
+        body = r.json()
+        assert body["meta"]["request_id"] == r.headers["x-request-id"]
+        assert body["meta"]["model_artifact_sha256"]
+
+    def test_access_log_line_emitted(self, client, caplog):
+        # One structured JSON log line per request is expected; this asserts log.info() is actually called with the right shape, independent of whether logging.basicConfig gives it a visible handler under uvicorn.
+        import json as _json
+        with caplog.at_level("INFO", logger="gpp.access"):
+            r = client.get("/health")
+        lines = [rec.message for rec in caplog.records if rec.name == "gpp.access"]
+        assert len(lines) == 1
+        payload = _json.loads(lines[0])
+        assert payload["request_id"] == r.headers["x-request-id"]
+        assert payload["route"] == "/health"
+        assert payload["status"] == 200
+        assert "latency_ms" in payload
+
+    def test_rate_limit_returns_429_above_burst(self, client, monkeypatch):
+        # RATE_LIMIT_RPM=60 tokens, refilled at 1/s; a tight burst of 61 requests on a fresh bucket must trip the limiter on the 61st. `_rate_limiter` is a module-level singleton shared by every request, so monkeypatching a fresh instance keeps this burst from draining the bucket other tests rely on.
+        import src.api.main as main_module
+        monkeypatch.setattr(main_module, "_rate_limiter", RateLimiter())
+        statuses = [client.get("/health").status_code for _ in range(61)]
+        assert statuses.count(429) >= 1
 
 
 # POST /predict

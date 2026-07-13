@@ -1,5 +1,7 @@
 # GPU Perf Prophet static cloud GPU pricing (source_date 2026-06-17): a static snapshot, no live API calls — price_per_gpu_hr is USD, on-demand, single GPU, no reserved/spot discount, representative rate only (varies by provider/region/term). Sources (June 2026): AMD Developer Cloud, Lambda Labs, Vast.ai/RunPod community rates, getdeploying.com/gpus/amd-mi355x.
 
+source_date: "2026-06-17"
+
 pricing:
 
   mi300x:
