@@ -95,6 +95,50 @@ def _ranking_key(ranking_objective: str):
     return key
 
 
+def _infeasibility_block(filtered: list[dict]) -> Optional[dict]:
+    """When every candidate is filtered, group the rejections by cause and suggest what to relax, rather than leaving the caller to reverse-engineer it from raw reject_reason strings."""
+    if not filtered:
+        return None
+    groups: dict[str, list[str]] = {}
+    for entry in filtered:
+        reason = entry["reject_reason"]
+        if "not supported on" in reason:
+            category = "precision_unsupported"
+        elif "VRAM" in reason:
+            category = "memory_does_not_fit"
+        elif "budget" in reason:
+            category = "over_budget"
+        elif "minimum" in reason:
+            category = "throughput_below_minimum"
+        else:
+            category = "other"
+        groups.setdefault(category, []).append(entry["gpu_id"])
+
+    relaxable: list[str] = []
+    if "memory_does_not_fit" in groups:
+        relaxable.append(
+            "reduce batch_size/input_tokens/output_tokens, or choose a lower "
+            "accuracy_tier to shrink the memory footprint"
+        )
+    if "over_budget" in groups:
+        relaxable.append("raise budget_per_gpu_hr")
+    if "throughput_below_minimum" in groups:
+        relaxable.append("lower min_throughput_tok_per_sec")
+    if "precision_unsupported" in groups:
+        relaxable.append("choose a different accuracy_tier supported by more GPUs")
+
+    return {
+        "message": (
+            f"No in-scope GPU satisfies every constraint "
+            f"({len(filtered)} candidate(s) excluded)."
+        ),
+        "reasons": [
+            {"category": cat, "gpu_ids": sorted(ids)} for cat, ids in groups.items()
+        ],
+        "relaxable": relaxable,
+    }
+
+
 def _pareto_frontier(
     candidates: list[dict],
     ranking_objective: str = "tokens_per_dollar",
@@ -407,6 +451,8 @@ class GpuRecommender:
             "frontier":  frontier,
             "dominated": dominated,
             "filtered":  filtered,
+            "top_recommendation": frontier[0] if frontier else None,
+            "infeasibility": _infeasibility_block(filtered) if not frontier else None,
             "workload": {
                 "model_name":     model_name,
                 "scenario":       scenario,

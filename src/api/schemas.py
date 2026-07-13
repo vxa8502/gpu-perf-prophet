@@ -155,6 +155,23 @@ class FilteredGpuResult(GpuResult):
     reject_reason: str
 
 
+class InfeasibilityReason(BaseModel):
+    category: str = Field(
+        description="One of precision_unsupported, memory_does_not_fit, "
+                     "over_budget, throughput_below_minimum, other."
+    )
+    gpu_ids: list[str]
+
+
+class Infeasibility(BaseModel):
+    message: str
+    reasons: list[InfeasibilityReason]
+    relaxable: list[str] = Field(
+        description="Human-readable suggestions for which request field(s) "
+                     "to relax to admit at least one candidate."
+    )
+
+
 class WorkloadSummary(BaseModel):
     model_name:                str
     scenario:                  str
@@ -174,4 +191,13 @@ class RecommendResponse(BaseModel):
     dominated: list[GpuResult]
     filtered:  list[FilteredGpuResult]
     workload:  WorkloadSummary
+    top_recommendation: Optional[GpuResult] = Field(
+        description="frontier[0] (already sorted by ranking_objective), or "
+                     "null iff frontier is empty — see infeasibility."
+    )
+    infeasibility: Optional[Infeasibility] = Field(
+        description="Populated iff frontier is empty: which constraint(s) "
+                     "eliminated which GPUs, and what to relax. Null whenever "
+                     "top_recommendation is non-null."
+    )
     meta: Optional[MetaOut] = None

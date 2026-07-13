@@ -197,6 +197,21 @@ class TestGpuRecommender:
         for f in result["filtered"]:
             assert f["memory_fit_verdict"] == "does_not_fit"
 
+        # Frontier empty ⇒ top_recommendation null and infeasibility populated with cause + relaxable hint
+        assert result["top_recommendation"] is None
+        infeasibility = result["infeasibility"]
+        assert infeasibility is not None
+        assert infeasibility["reasons"]
+        assert all(r["category"] == "memory_does_not_fit" for r in infeasibility["reasons"])
+        assert any("accuracy_tier" in hint for hint in infeasibility["relaxable"])
+
+    def test_infeasibility_null_when_frontier_nonempty(self, recommender):
+        # Converse: top_recommendation must mirror frontier[0] and infeasibility must stay null whenever at least one GPU survives.
+        result = recommender.recommend(model_name="llama2-70b", accuracy_tier="base")
+        assert result["frontier"]
+        assert result["top_recommendation"] == result["frontier"][0]
+        assert result["infeasibility"] is None
+
     def test_tight_verdict_included_not_filtered(self, recommender):
         # Golden "tight" case: llama2-70b base tier is FP16 on AMD too, so MI300X needs weights=140 GB + kv≈24 GB + 10% overhead ≈ 180.6 GB against its 192 GB -> util≈0.94, inside the tight band; tight is a disclosure flag, not a hard exclusion, so MI300X must still appear as a real candidate.
         result = recommender.recommend(model_name="llama2-70b", accuracy_tier="base")
