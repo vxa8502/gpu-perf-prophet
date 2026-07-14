@@ -105,6 +105,7 @@ Key design principle borrowed from [NeuSight](https://arxiv.org/abs/2405.12031):
 - The self-run AMD calibration set (24 rows, MI300X, 2 precisions, 4 models) falls short of its own ≥50-row / ≥3-batch-size target — it has no batch-size variation.
 - Multi-GPU scaling, training-time workloads, and Blackwell/MI400 families are out of scope.
 - No live API calls — all inference is local to the Docker container.
+- `/predict`/`/recommend` p95 latency measured at ~1.5ms (1,000-request synthetic load test), far under the 200ms budget — but measured locally in-process, not on the deployed Hugging Face Spaces CPU tier over a real network connection.
 
 ## Tech stack
 
