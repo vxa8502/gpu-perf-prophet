@@ -34,6 +34,22 @@ class TestHealth:
         r = client.get("/health")
         assert r.json()["model_loaded"] is True
 
+    def test_returns_provenance_fields_matching_version_endpoint(self, client):
+        # Checked against /version's own response, not re-derived from source files again — TestVersion.test_returns_provenance_fields already independently verifies /version against the raw files; this test only confirms /health doesn't drift from it.
+        health_body = client.get("/health").json()
+        version_body = client.get("/version").json()
+        for field in ("model_artifact_version", "model_artifact_sha256", "pricing_snapshot_date", "gpu_spec_db_version"):
+            assert health_body[field] == version_body[field]
+
+    def test_degrades_gracefully_without_provenance_when_model_not_loaded(self, client, monkeypatch):
+        # /version raises 503 when _predictor is None; /health must not, since it exists to report exactly that "not ready yet" state.
+        import src.api.main as main_module
+        monkeypatch.setattr(main_module, "_predictor", None)
+        r = client.get("/health")
+        assert r.status_code == 200
+        body = r.json()
+        assert body == {"status": "ok", "model_loaded": False}
+
 
 # /gpus
 

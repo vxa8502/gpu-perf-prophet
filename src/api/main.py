@@ -151,7 +151,7 @@ def _get_recommender() -> GpuRecommender:
 
 
 def _provenance_fields() -> dict:
-    """The 4 fields VersionOut and MetaOut share (everything but MetaOut's request_id) — the single source both /version and _build_meta() read from, so a future provenance field only needs adding in one place instead of two independently-maintained copies."""
+    """The 4 fields VersionOut and MetaOut share (everything but MetaOut's request_id) — the single source /version, /health, and _build_meta() all read from, so a future provenance field only needs adding in one place instead of several independently-maintained copies."""
     predictor = _get_predictor()
     return {
         "model_artifact_version": predictor.model_version,
@@ -178,7 +178,11 @@ async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONR
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "model_loaded": _predictor is not None}
+    body: dict = {"status": "ok", "model_loaded": _predictor is not None}
+    # _provenance_fields() raises 503 via _get_predictor() when unset, but a health check must never itself throw on the exact "not ready yet" state it exists to report.
+    if _predictor is not None:
+        body.update(_provenance_fields())
+    return body
 
 
 @app.get("/version", response_model=VersionOut)
