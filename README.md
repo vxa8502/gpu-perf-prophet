@@ -108,7 +108,7 @@ Key design principle borrowed from [NeuSight](https://arxiv.org/abs/2405.12031):
 
 ## Tech stack
 
-Python · XGBoost · FastAPI · Streamlit · Docker · SHAP
+Python · XGBoost · FastAPI · Streamlit · Docker
 
 ---
 
